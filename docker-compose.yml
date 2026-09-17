@@ -1,0 +1,39 @@
+services:
+  libretranslate:
+    image: libretranslate/libretranslate:latest
+    container_name: stellar-libretranslate
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+    environment:
+      # Host and port configuration
+      - LT_HOST=0.0.0.0
+      - LT_PORT=5000
+      # Pre-load most common/major languages (English, Spanish, French, German, Italian, Portuguese,
+      # Russian, Chinese, Japanese, Korean, Arabic, Hindi, Dutch, Polish, Turkish, Ukrainian,
+      # Czech, Swedish, Danish, Finnish, Greek, Hebrew, Vietnamese, Thai, Indonesian, Romanian, Hungarian).
+      # Note: To load ALL 30+ available languages, comment out or remove LT_LOAD_ONLY.
+      - LT_LOAD_ONLY=en,es,fr,de,it,pt,ru,zh,ja,ko,ar,hi,nl,pl,tr,uk,cs,sv,da,fi,el,he,vi,th,id,ro,hu
+      # Automatically download updates for models if available
+      - LT_UPDATE_MODELS=true
+      # Disable API key requirement for local mod development
+      - LT_API_KEYS=false
+      # Remove request and character limits for local client traffic
+      - LT_REQ_LIMIT=0
+      - LT_CHAR_LIMIT=0
+      - LT_BATCH_LIMIT=0
+      # Concurrency threads for translating multiple chat lines / sign clusters in parallel
+      - LT_THREADS=4
+    volumes:
+      # Persist downloaded language models across container restarts
+      - libretranslate_models:/home/libretranslate/.local
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5000/languages || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  libretranslate_models:
+    name: stellar_libretranslate_models

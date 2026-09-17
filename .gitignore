@@ -1,0 +1,57 @@
+# ==========================================
+# Gradle & Build Outputs
+# ==========================================
+.gradle/
+build/
+bin/
+out/
+dist/
+
+# ==========================================
+# Kotlin & Compilation Caches
+# ==========================================
+.kotlin/
+*.kotlin_module
+
+# ==========================================
+# Minecraft, Loom & Runtime Logs
+# ==========================================
+run/
+logs/
+*.log
+crash-reports/
+runGameTestServer/
+.fabric/
+.quilt/
+
+# ==========================================
+# IDE & Editor Configurations
+# ==========================================
+.idea/
+*.iml
+*.iws
+*.ipr
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+*.code-workspace
+.project
+.classpath
+.settings/
+
+# ==========================================
+# Operating System & Temporary Files
+# ==========================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+*~
+*.swp
+*.swo
+*.bak
+*.tmp

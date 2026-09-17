@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -e
+
+MODULE_NAME="$(basename "$PWD")"
+echo "========================================================"
+echo "🔍 [Pre-Commit Hook] Running Detekt lint checks for ${MODULE_NAME}..."
+echo "========================================================"
+
+if [ -f "../gradlew" ]; then
+    GRADLE_BIN="../gradlew"
+elif [ -f "./gradlew" ]; then
+    GRADLE_BIN="./gradlew"
+else
+    GRADLE_BIN="gradle"
+fi
+
+"$GRADLE_BIN" ":${MODULE_NAME}:detekt" --no-daemon
+
+echo "========================================================"
+echo "✅ [Pre-Commit Hook] ${MODULE_NAME} lint checks passed!"
+echo "========================================================"

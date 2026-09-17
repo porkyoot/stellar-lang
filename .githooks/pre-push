@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -e
+
+MODULE_NAME="$(basename "$PWD")"
+echo "========================================================"
+echo "🧪 [Pre-Push Hook] Running Kotest unit tests for ${MODULE_NAME}..."
+echo "========================================================"
+
+if [ -f "../gradlew" ]; then
+    GRADLE_BIN="../gradlew"
+elif [ -f "./gradlew" ]; then
+    GRADLE_BIN="./gradlew"
+else
+    GRADLE_BIN="gradle"
+fi
+
+"$GRADLE_BIN" ":${MODULE_NAME}:test" ":${MODULE_NAME}:jacocoTestCoverageVerification" --no-daemon
+
+echo "========================================================"
+echo "✅ [Pre-Push Hook] ${MODULE_NAME} tests and coverage verification (>= 95%) passed!"
+echo "========================================================"

@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "quilt_loader": {
+    "group": "com.stellar",
+    "id": "stellar_lang",
+    "version": "1.0.0",
+    "metadata": {
+      "name": "Stellar Lang",
+      "description": "Real-time in-game translation for chat, signs, books, entities, and items powered by LibreTranslate.",
+      "icon": "assets/stellar_lang/icon.png"
+    },
+    "intermediate_mappings": "net.fabricmc:intermediary",
+    "entrypoints": {
+      "client": {
+        "adapter": "kotlin",
+        "value": "com.stellar.lang.StellarLangMod"
+      },
+      "modmenu": {
+        "adapter": "kotlin",
+        "value": "com.stellar.lang.config.StellarLangModMenu"
+      }
+    },
+    "depends": [
+      {
+        "id": "stellar_core",
+        "versions": "*",
+        "optional": true
+      },
+      {
+        "id": "modmenu",
+        "versions": "*",
+        "optional": true
+      }
+    ]
+  },
+  "mixin": "stellar_lang.mixins.json"
+}

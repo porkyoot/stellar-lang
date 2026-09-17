@@ -1,0 +1,44 @@
+dependencies {
+    implementation(project(":stellar-core"))
+    compileOnly("com.terraformersmc:modmenu:11.0.3-local")
+    compileOnly("me.shedaniel.cloth:cloth-config-fabric:15.0.140-local")
+    testImplementation("com.terraformersmc:modmenu:11.0.3-local")
+    testImplementation("me.shedaniel.cloth:cloth-config-fabric:15.0.140-local")
+}
+
+tasks.named<Jar>("jar") {
+    from(project(":stellar-core").the<SourceSetContainer>()["main"].output)
+}
+
+tasks.named<JacocoReport>("jacocoTestReport") {
+    classDirectories.setFrom(
+        classDirectories.files.map {
+            fileTree(it) {
+                exclude("**/mixin/**", "**/LangClothConfigScreen*", "**/StellarLangModMenu*")
+            }
+        }
+    )
+}
+
+tasks.named<JacocoCoverageVerification>("jacocoTestCoverageVerification") {
+    dependsOn(tasks.named("test"))
+    classDirectories.setFrom(
+        classDirectories.files.map {
+            fileTree(it) {
+                exclude("**/mixin/**", "**/LangClothConfigScreen*", "**/StellarLangModMenu*")
+            }
+        }
+    )
+    violationRules {
+        rule {
+            limit {
+                minimum = "0.95".toBigDecimal()
+            }
+        }
+    }
+}
+
+tasks.named("check") {
+    dependsOn(tasks.named("jacocoTestCoverageVerification"))
+}
+
