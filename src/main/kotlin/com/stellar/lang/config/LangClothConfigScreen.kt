@@ -3,6 +3,7 @@ package com.stellar.lang.config
 import com.stellar.core.config.ConfigManager
 import com.stellar.core.input.Key
 import com.stellar.lang.StellarLangMod
+import com.stellar.lang.service.TranslationService
 import me.shedaniel.clothconfig2.api.ConfigBuilder
 import me.shedaniel.clothconfig2.api.ConfigEntryBuilder
 import net.minecraft.client.gui.screens.Screen
@@ -58,19 +59,17 @@ object LangClothConfigScreen {
     private fun buildApiCategory(builder: ConfigBuilder, entries: ConfigEntryBuilder, config: StellarLangConfig) {
         val category = builder.getOrCreateCategory(Component.literal("API & Keys"))
 
-        val apiHost = entries
-            .startStrField(Component.literal("LibreTranslate API Host"), config.apiHost.value())
-            .setDefaultValue("https://libretranslate.com")
-            .setTooltip(Component.literal("Base URL of LibreTranslate service (public or self-hosted)"))
-            .setSaveConsumer { value -> config.apiHost.setValue(value.trim(), true) }
-            .build()
+        var currentHost = config.apiHost.value()
+        var currentApiKey = config.apiKey.value()
 
-        val apiKey = entries
-            .startStrField(Component.literal("API Key"), config.apiKey.value())
-            .setDefaultValue("")
-            .setTooltip(Component.literal("LibreTranslate API key. Get key at: https://libretranslate.com"))
-            .setSaveConsumer { value -> config.apiKey.setValue(value.trim(), true) }
-            .build()
+        val apiHost = buildApiHostField(entries, config) { currentHost = it }
+        val apiKey = buildApiKeyField(entries, config) { currentApiKey = it }
+        val testButton = buildTestConnectionButton(
+            entries = entries,
+            config = config,
+            getHost = { currentHost },
+            getKey = { currentApiKey },
+        )
 
         val instructions = entries
             .startTextDescription(
@@ -80,7 +79,118 @@ object LangClothConfigScreen {
 
         category.addEntry(apiHost)
         category.addEntry(apiKey)
+        category.addEntry(testButton)
         category.addEntry(instructions)
+    }
+
+    private fun buildApiHostField(
+        entries: ConfigEntryBuilder,
+        config: StellarLangConfig,
+        onChanged: (String) -> Unit,
+    ): me.shedaniel.clothconfig2.api.AbstractConfigListEntry<*> {
+        return entries
+            .startStrField(Component.literal("LibreTranslate API Host"), config.apiHost.value())
+            .setDefaultValue("https://libretranslate.com")
+            .setTooltip(Component.literal("Base URL of LibreTranslate service (public or self-hosted)"))
+            .setErrorSupplier { typed ->
+                onChanged(typed.trim())
+                java.util.Optional.empty()
+            }
+            .setSaveConsumer { value -> config.apiHost.setValue(value.trim(), true) }
+            .build()
+    }
+
+    private fun buildApiKeyField(
+        entries: ConfigEntryBuilder,
+        config: StellarLangConfig,
+        onChanged: (String) -> Unit,
+    ): me.shedaniel.clothconfig2.api.AbstractConfigListEntry<*> {
+        return entries
+            .startStrField(Component.literal("API Key"), config.apiKey.value())
+            .setDefaultValue("")
+            .setTooltip(Component.literal("LibreTranslate API key. Get key at: https://libretranslate.com"))
+            .setErrorSupplier { typed ->
+                onChanged(typed.trim())
+                java.util.Optional.empty()
+            }
+            .setSaveConsumer { value -> config.apiKey.setValue(value.trim(), true) }
+            .build()
+    }
+
+    private fun buildTestConnectionButton(
+        entries: ConfigEntryBuilder,
+        config: StellarLangConfig,
+        getHost: () -> String,
+        getKey: () -> String,
+    ): me.shedaniel.clothconfig2.api.AbstractConfigListEntry<*> {
+        var initialized = false
+        var testStatus = "Click to Test"
+        var testError: String? = null
+
+        return entries
+            .startBooleanToggle(Component.literal("Test Translation Connection"), false)
+            .setYesNoTextSupplier { _ ->
+                if (!initialized) {
+                    initialized = true
+                } else {
+                    testStatus = "⌛ Testing..."
+                    testError = null
+                    triggerConnectionTest(config, getHost(), getKey()) { status, error ->
+                        testStatus = status
+                        testError = error
+                    }
+                }
+                Component.literal(testStatus)
+            }
+            .setErrorSupplier { _ ->
+                testError?.let {
+                    java.util.Optional.of(Component.literal("Error: $it"))
+                } ?: java.util.Optional.empty()
+            }
+            .setTooltip(
+                Component.literal("Click to test connectivity and translation with the current API host and key"),
+            )
+            .build()
+    }
+
+    private fun triggerConnectionTest(
+        config: StellarLangConfig,
+        host: String,
+        apiKey: String,
+        onUpdate: (String, String?) -> Unit,
+    ) {
+        TranslationService.testConnection(
+            host = host.ifBlank { config.apiHost.value() },
+            apiKey = apiKey,
+            targetLang = config.targetLanguage.value(),
+        ) { result ->
+            result.fold(
+                onSuccess = { translated ->
+                    onUpdate("✅ OK ('Hello' -> '$translated')", null)
+                    showToast("Stellar Lang", "Connected! 'Hello' -> '$translated'")
+                },
+                onFailure = { err ->
+                    val msg = err.message ?: "Connection failed"
+                    onUpdate("❌ Failed (Click to Retry)", msg)
+                    showToast("Stellar Lang", "Test Failed: $msg")
+                },
+            )
+        }
+    }
+
+    private fun showToast(title: String, message: String) {
+        runCatching {
+            val mc = net.minecraft.client.Minecraft.getInstance()
+            mc.execute {
+                val toastManager = mc.gui.toastManager()
+                net.minecraft.client.gui.components.toasts.SystemToast.addOrUpdate(
+                    toastManager,
+                    net.minecraft.client.gui.components.toasts.SystemToast.SystemToastId(),
+                    Component.literal(title),
+                    Component.literal(message),
+                )
+            }
+        }
     }
 
     private fun buildFeaturesCategory(builder: ConfigBuilder, entries: ConfigEntryBuilder, config: StellarLangConfig) {

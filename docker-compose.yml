@@ -14,14 +14,14 @@ services:
       # Czech, Swedish, Danish, Finnish, Greek, Hebrew, Vietnamese, Thai, Indonesian, Romanian, Hungarian).
       # Note: To load ALL 30+ available languages, comment out or remove LT_LOAD_ONLY.
       - LT_LOAD_ONLY=en,es,fr,de,it,pt,ru,zh,ja,ko,ar,hi,nl,pl,tr,uk,cs,sv,da,fi,el,he,vi,th,id,ro,hu
-      # Automatically download updates for models if available
-      - LT_UPDATE_MODELS=true
+      # Disable model re-check on boot since models are persisted in the volume
+      - LT_UPDATE_MODELS=false
       # Disable API key requirement for local mod development
       - LT_API_KEYS=false
-      # Remove request and character limits for local client traffic
-      - LT_REQ_LIMIT=0
-      - LT_CHAR_LIMIT=0
-      - LT_BATCH_LIMIT=0
+      # Remove request and character limits (-1 = unlimited)
+      - LT_REQ_LIMIT=-1
+      - LT_CHAR_LIMIT=-1
+      - LT_BATCH_LIMIT=-1
       # Concurrency threads for translating multiple chat lines / sign clusters in parallel
       - LT_THREADS=4
     volumes:

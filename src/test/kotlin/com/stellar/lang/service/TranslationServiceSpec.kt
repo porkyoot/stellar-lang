@@ -427,4 +427,31 @@ class TranslationServiceSpec : FunSpec({
         val res = method.invoke(TranslationService, badJson, listOf("Item1"), "es")
         res shouldBe null
     }
+
+    test("testConnection reports success when API returns valid translation") {
+        responseCode.set(200)
+        responseBody = """{"translatedText": "Bonjour", "detectedLanguage": "en"}"""
+        val latch = CountDownLatch(1)
+        var outcome: Result<String>? = null
+        TranslationService.testConnection("http://127.0.0.1:$serverPort", "key", "fr") { res ->
+            outcome = res
+            latch.countDown()
+        }
+        latch.await(5, TimeUnit.SECONDS) shouldBe true
+        outcome?.isSuccess shouldBe true
+        outcome?.getOrNull() shouldBe "Bonjour"
+    }
+
+    test("testConnection reports failure when server returns HTTP error") {
+        responseCode.set(500)
+        responseBody = """{"error": "Internal Server Error"}"""
+        val latch = CountDownLatch(1)
+        var outcome: Result<String>? = null
+        TranslationService.testConnection("http://127.0.0.1:$serverPort", "key", "fr") { res ->
+            outcome = res
+            latch.countDown()
+        }
+        latch.await(5, TimeUnit.SECONDS) shouldBe true
+        outcome?.isFailure shouldBe true
+    }
 })

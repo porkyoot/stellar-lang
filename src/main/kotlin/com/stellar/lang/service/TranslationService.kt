@@ -33,6 +33,9 @@ object TranslationService {
     private const val HTTP_OK_MAX = 299
     private const val HTTP_TOO_MANY_REQUESTS = 429
     private const val APPLICATION_JSON = "application/json"
+    private const val HEADER_CONTENT_TYPE = "Content-Type"
+    private const val HEADER_ACCEPT = "Accept"
+    private const val ERROR_SNIPPET_LENGTH = 80
     private const val UNKNOWN_LANG = "unknown"
 
     private val httpClient: HttpClient = HttpClient.newBuilder()
@@ -171,8 +174,8 @@ object TranslationService {
             val request = HttpRequest.newBuilder()
                 .uri(endpoint)
                 .timeout(Duration.ofSeconds(TIMEOUT_SECONDS))
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON)
+                .header(HEADER_CONTENT_TYPE, APPLICATION_JSON)
+                .header(HEADER_ACCEPT, APPLICATION_JSON)
                 .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
                 .build()
 
@@ -205,8 +208,8 @@ object TranslationService {
             val request = HttpRequest.newBuilder()
                 .uri(endpoint)
                 .timeout(Duration.ofSeconds(TIMEOUT_SECONDS))
-                .header("Content-Type", APPLICATION_JSON)
-                .header("Accept", APPLICATION_JSON)
+                .header(HEADER_CONTENT_TYPE, APPLICATION_JSON)
+                .header(HEADER_ACCEPT, APPLICATION_JSON)
                 .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
                 .build()
 
@@ -312,5 +315,39 @@ object TranslationService {
 
     fun clearCache() {
         TranslationCache.clear()
+    }
+
+    fun testConnection(
+        host: String,
+        apiKey: String,
+        targetLang: String = "en",
+        callback: (Result<String>) -> Unit,
+    ) {
+        executor.execute {
+            val outcome = runCatching {
+                val endpoint = URI.create(normalizeEndpoint(host))
+                val jsonPayload = buildPayload("Hello", apiKey, targetLang)
+
+                val request = HttpRequest.newBuilder()
+                    .uri(endpoint)
+                    .timeout(Duration.ofSeconds(TIMEOUT_SECONDS))
+                    .header(HEADER_CONTENT_TYPE, APPLICATION_JSON)
+                    .header(HEADER_ACCEPT, APPLICATION_JSON)
+                    .POST(HttpRequest.BodyPublishers.ofString(jsonPayload))
+                    .build()
+
+                val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+                if (response.statusCode() in HTTP_OK_MIN..HTTP_OK_MAX) {
+                    val parsed = parseSingleResponse(response.body(), "Hello", targetLang)
+                    parsed?.translatedText ?: "OK (HTTP ${response.statusCode()})"
+                } else {
+                    val msg = runCatching {
+                        JsonParser.parseString(response.body()).asJsonObject.get("error")?.asString
+                    }.getOrNull() ?: response.body().take(ERROR_SNIPPET_LENGTH)
+                    error("HTTP ${response.statusCode()}: $msg")
+                }
+            }
+            callback(outcome)
+        }
     }
 }
