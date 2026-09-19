@@ -167,6 +167,8 @@ object TranslationCache {
         return false
     }
 
+    fun isFailed(key: String): Boolean = isThrottled(key)
+
     fun clear() {
         synchronized(cacheLock) {
             lruCache.clear()

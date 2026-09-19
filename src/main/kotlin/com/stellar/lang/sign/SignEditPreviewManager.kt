@@ -20,14 +20,17 @@ object SignEditPreviewManager {
     var currentTranslatedText: String = ""
 
     val isTranslating = AtomicBoolean(false)
+    val hasFailed = AtomicBoolean(false)
 
     fun clear() {
         lastRequestedText = ""
         lastRequestTime = 0L
         currentTranslatedText = ""
         isTranslating.set(false)
+        hasFailed.set(false)
     }
 
+    @Suppress("CognitiveComplexMethod")
     fun updateRealtimeTranslation(inputText: String): String {
         val trimmed = inputText.trim()
         if (trimmed.isEmpty()) {
@@ -41,7 +44,12 @@ object SignEditPreviewManager {
         if (cached != null) {
             currentTranslatedText = cached.translatedText
             lastRequestedText = trimmed
+            hasFailed.set(false)
             return currentTranslatedText
+        }
+
+        if (TranslationService.isFailed(trimmed, targetLang)) {
+            hasFailed.set(true)
         }
 
         if (trimmed != lastRequestedText) {
@@ -53,6 +61,9 @@ object SignEditPreviewManager {
                 isTranslating.set(false)
                 if (result != null) {
                     currentTranslatedText = result.translatedText
+                    hasFailed.set(false)
+                } else {
+                    hasFailed.set(true)
                 }
             }
         }

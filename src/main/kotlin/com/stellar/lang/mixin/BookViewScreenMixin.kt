@@ -241,8 +241,8 @@ abstract class BookViewScreenMixin : Screen(Component.empty()) {
 
         // Draw header above translated book
         val langCode = TranslationService.getTargetLanguage().uppercase()
-        val header = Component.literal("[T] ")
-            .withStyle(ChatFormatting.AQUA, ChatFormatting.BOLD)
+        val badge = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(failed = false, trailingSpace = true)
+        val header = Component.empty().append(badge)
             .append(Component.literal("Translated ($langCode)").withStyle(ChatFormatting.WHITE))
         extractor.centeredText(this.font, header, rightCenterX.toInt(), headerY, HEADER_WHITE_COLOR)
     }

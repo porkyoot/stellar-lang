@@ -2,7 +2,6 @@ package com.stellar.lang.entity
 
 import com.stellar.lang.input.StellarLangInputHandler
 import com.stellar.lang.service.TranslationService
-import net.minecraft.ChatFormatting
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.MutableComponent
 import net.minecraft.world.entity.Entity
@@ -39,6 +38,8 @@ object EntityTranslationManager {
         TranslationService.translateAsync(plainText) { result ->
             if (result != null && !result.isSameLanguage) {
                 textComponentCache[textKey] = createFormattedName(result.translatedText)
+            } else if (result == null && TranslationService.isFailed(plainText, targetLang)) {
+                textComponentCache[textKey] = createFailedName(plainText)
             }
         }
     }
@@ -61,6 +62,12 @@ object EntityTranslationManager {
             return comp
         }
 
+        if (TranslationService.isFailed(plainText, targetLang)) {
+            val failedComp = createFailedName(plainText)
+            textComponentCache[textKey] = failedComp
+            return failedComp
+        }
+
         onEntityNameChanged(original)
         return original
     }
@@ -81,7 +88,12 @@ object EntityTranslationManager {
     }
 
     private fun createFormattedName(translatedText: String): MutableComponent {
-        val badge = Component.literal("[T] ").withStyle(ChatFormatting.AQUA).withStyle(ChatFormatting.BOLD)
+        val badge = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(failed = false, trailingSpace = true)
         return Component.empty().append(badge).append(Component.literal(translatedText))
+    }
+
+    private fun createFailedName(originalText: String): MutableComponent {
+        val badge = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(failed = true, trailingSpace = true)
+        return Component.empty().append(badge).append(Component.literal(originalText))
     }
 }

@@ -61,6 +61,9 @@ class AbstractSignRendererMixin<S : SignRenderState> {
             SignTranslationManager.translateSignText(sign.backText)
         }
 
+        val isFrontFailed = frontOutcome == null && SignTranslationManager.isFailed(sign, true)
+        val isBackFailed = backOutcome == null && SignTranslationManager.isFailed(sign, false)
+
         val player = runCatching { Minecraft.getInstance().player }.getOrNull()
         val isFacingFront = player?.let { sign.isFacingFrontText(it) } ?: true
         val isHanging = sign is HangingSignBlockEntity || state is HangingSignRenderState
@@ -72,6 +75,8 @@ class AbstractSignRendererMixin<S : SignRenderState> {
                 backOutcome = backOutcome,
                 isFacingFront = isFacingFront,
                 isHanging = isHanging,
+                isFrontFailed = isFrontFailed,
+                isBackFailed = isBackFailed,
             ),
         )
     }

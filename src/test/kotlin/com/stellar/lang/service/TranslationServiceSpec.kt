@@ -744,4 +744,85 @@ class TranslationServiceSpec : FunSpec({
         failLatch.await(3, TimeUnit.SECONDS) shouldBe true
         connectionFailure shouldBe true
     }
+
+    test("isFailed returns correct status for 1-arg and 2-arg overloads") {
+        TranslationService.isFailed("hello_world") shouldBe false
+        TranslationService.isFailed("hello_world", "es") shouldBe false
+
+        val key = TranslationService.cacheKey("hello_world", "es")
+        TranslationCache.markFailed(key)
+
+        TranslationService.isFailed("hello_world") shouldBe true
+        TranslationService.isFailed("hello_world", "es") shouldBe true
+
+        TranslationCache.clear()
+        TranslationService.isFailed("hello_world") shouldBe false
+
+        TranslationCache.tripCircuitBreaker()
+        TranslationService.isFailed("hello_world") shouldBe true
+        TranslationCache.resetCircuitBreaker()
+        TranslationService.isFailed("hello_world") shouldBe false
+    }
+
+    test("executeTranslation and executeBatchTranslation delegate to custom plugins correctly") {
+        val mockTranslator = object : com.stellar.lang.plugin.TranslationPlugin {
+            override val id = "custom_mock"
+            override val displayName = "Custom Mock"
+            override val description = "Mock"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready("Ready")
+            override suspend fun translate(text: String, sourceLang: String?, targetLang: String): String = "mock_$text"
+        }
+
+        val mockDetector = object : com.stellar.lang.plugin.LanguageDetectorPlugin {
+            override val id = "custom_mock"
+            override val displayName = "Custom Mock"
+            override val description = "Mock"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready("Ready")
+            override suspend fun detectLanguage(text: String): String = if (text == "same") "es" else "fr"
+        }
+
+        com.stellar.lang.plugin.PluginRegistry.registerTranslator(mockTranslator)
+        com.stellar.lang.plugin.PluginRegistry.registerDetector(mockDetector)
+
+        val config = TranslationService.getConfig()
+        config.translationPlugin.setValue("custom_mock", false)
+        config.detectionPlugin.setValue("custom_mock", false)
+        config.targetLanguage.setValue("es", false)
+
+        val latch = CountDownLatch(2)
+        var singleRes: TranslationResult? = null
+        var sameLangRes: TranslationResult? = null
+
+        TranslationService.translateAsync("bonjour") { res ->
+            singleRes = res
+            latch.countDown()
+        }
+
+        TranslationService.translateAsync("same") { res ->
+            sameLangRes = res
+            latch.countDown()
+        }
+
+        latch.await(3, TimeUnit.SECONDS) shouldBe true
+        singleRes shouldNotBe null
+        singleRes?.translatedText shouldBe "mock_bonjour"
+        singleRes?.isSameLanguage shouldBe false
+
+        sameLangRes shouldNotBe null
+        sameLangRes?.isSameLanguage shouldBe true
+
+        val batchRes = TranslationService.translateBatchSync(listOf("bonjour", "salut"))
+        batchRes shouldNotBe null
+        batchRes?.size shouldBe 2
+        batchRes?.get(0)?.translatedText shouldBe "mock_bonjour"
+        batchRes?.get(1)?.translatedText shouldBe "mock_salut"
+
+        kotlinx.coroutines.runBlocking {
+            val directBatch = mockTranslator.translateBatch(listOf("one", "two"), "en", "es")
+            directBatch shouldBe listOf("mock_one", "mock_two")
+        }
+
+        config.translationPlugin.setValue("libretranslate", false)
+        config.detectionPlugin.setValue("libretranslate", false)
+    }
 })

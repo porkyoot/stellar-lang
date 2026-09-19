@@ -21,6 +21,7 @@ import java.util.regex.Pattern
  * Manages translation of chat messages, compatible with Chat Heads and player prefixes,
  * providing clickable [T] toggle functionality.
  */
+@Suppress("LargeClass")
 object ChatTranslationManager {
     const val COMMAND_PREFIX: String = "/stellar_lang_chat_toggle"
     private const val MIN_TRANSLATABLE_LENGTH = 2
@@ -157,6 +158,12 @@ object ChatTranslationManager {
             return translated
         }
 
+        if (cached == null && TranslationService.isFailed(payload.messageText, targetLang)) {
+            val failed = createFailedComponent(id, payload.messageText, payload.prefixComponent)
+            tracked.translatedComponent = failed
+            return failed
+        }
+
         if (cached == null) {
             triggerBackgroundChatTranslation(tracked, payload.messageText)
         }
@@ -169,6 +176,10 @@ object ChatTranslationManager {
             if (result != null && !result.isSameLanguage) {
                 val translated = createTranslatedComponent(tracked.id, result, tracked.prefixComponent)
                 tracked.translatedComponent = translated
+                scheduleChatRefresh(tracked)
+            } else if (result == null && TranslationService.isFailed(messageText)) {
+                val failedComp = createFailedComponent(tracked.id, messageText, tracked.prefixComponent)
+                tracked.translatedComponent = failedComp
                 scheduleChatRefresh(tracked)
             }
         }
@@ -203,6 +214,35 @@ object ChatTranslationManager {
             root.append(prefixComponent)
         }
         root.append(Component.literal(result.translatedText))
+        return root
+    }
+
+    fun createFailedComponent(
+        id: Long,
+        originalText: String,
+        prefixComponent: Component? = null,
+    ): MutableComponent {
+        val badge = Component.literal("[T] ").withStyle { style ->
+            style.withColor(ChatFormatting.RED)
+                .withBold(true)
+                .withStrikethrough(true)
+                .withHoverEvent(
+                    HoverEvent.ShowText(
+                        Component.literal(
+                            "Translation failed\n" +
+                                "Original: $originalText\n" +
+                                "Click to toggle original/translated text",
+                        ),
+                    ),
+                )
+                .withClickEvent(ClickEvent.RunCommand("$COMMAND_PREFIX $id"))
+        }
+
+        val root = Component.empty().append(badge)
+        if (prefixComponent != null) {
+            root.append(prefixComponent)
+        }
+        root.append(Component.literal(originalText))
         return root
     }
 

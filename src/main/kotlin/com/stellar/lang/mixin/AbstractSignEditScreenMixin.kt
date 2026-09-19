@@ -83,8 +83,11 @@ abstract class AbstractSignEditScreenMixin : Screen(Component.empty()) {
         )
 
         val langCode = TranslationService.getTargetLanguage().uppercase()
-        val header = Component.literal("[T] ")
-            .withStyle(ChatFormatting.AQUA, ChatFormatting.BOLD)
+        val badge = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(
+            SignEditPreviewManager.hasFailed.get(),
+            trailingSpace = true,
+        )
+        val header = Component.empty().append(badge)
             .append(Component.literal("Translated ($langCode)").withStyle(ChatFormatting.WHITE))
         extractor.centeredText(this.font, header, secondSignX.toInt(), (secondSignY - 50).toInt(), 0xFFFFFF)
 

@@ -26,7 +26,7 @@ import java.util.WeakHashMap
 /**
  * Utility for rendering in-game sign indicators and excess text tooltips/nametags.
  */
-@Suppress("TooManyFunctions")
+@Suppress("TooManyFunctions", "LargeClass")
 object SignTooltipRenderer {
     internal const val DEFAULT_TOOLTIP_WRAP_LENGTH = 35
     internal const val NAMETAG_SCALE = 0.5f
@@ -39,12 +39,15 @@ object SignTooltipRenderer {
     private const val INDICATOR_STANDING_Y = 24f
     private const val INDICATOR_HANGING_Y = -26f
     private const val INDICATOR_COLOR = 0xFF55FFFF.toInt()
+    private const val INDICATOR_FAILED_COLOR = 0xFFFF5555.toInt()
 
     data class SignRenderOutcomeData(
         val frontOutcome: SignFormatHelper.SignTranslationOutcome?,
         val backOutcome: SignFormatHelper.SignTranslationOutcome?,
         val isFacingFront: Boolean,
         val isHanging: Boolean = false,
+        val isFrontFailed: Boolean = false,
+        val isBackFailed: Boolean = false,
     )
 
     private val renderStateData = Collections.synchronizedMap(
@@ -114,13 +117,14 @@ object SignTooltipRenderer {
         val data = getRenderStateData(state) ?: resolveDataFromLevel(mc, state) ?: return
         val facingFront = isFacingFront(state, data, mc)
         val activeOutcome = if (facingFront) data.frontOutcome else data.backOutcome
-        if (activeOutcome == null) return
+        val isFailed = if (facingFront) data.isFrontFailed else data.isBackFailed
+        if (activeOutcome == null && !isFailed) return
 
-        // 1. Display [T] in cyan on the visible face using the same system as sign text
-        renderSignIndicator(state, data, facingFront, poseStack, submitNodeCollector, mc)
+        // 1. Display [T] on the visible face using the same system as sign text
+        renderSignIndicator(state, data, facingFront, poseStack, submitNodeCollector, mc, isFailed)
 
         // 2. Display nametag over the sign strictly on the visible face if text has overflow
-        if (activeOutcome.hasOverflow) {
+        if (activeOutcome != null && activeOutcome.hasOverflow) {
             renderOverSignNametag(activeOutcome, state, poseStack, submitNodeCollector, cameraRenderState)
         }
     }
@@ -142,6 +146,7 @@ object SignTooltipRenderer {
         poseStack: com.mojang.blaze3d.vertex.PoseStack,
         submitNodeCollector: SubmitNodeCollector,
         mc: Minecraft,
+        isFailed: Boolean = false,
     ) {
         val transformations = state.transformations
         val transformation = if (facingFront) transformations.frontText() else transformations.backText()
@@ -149,12 +154,12 @@ object SignTooltipRenderer {
         val isHanging = data.isHanging || state is HangingSignRenderState
         val textY = if (isHanging) INDICATOR_HANGING_Y else INDICATOR_STANDING_Y
 
-        val indicator = Component.literal("[T]").withStyle(ChatFormatting.AQUA, ChatFormatting.BOLD)
+        val indicator = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(isFailed, trailingSpace = false)
         val font = mc.font
         val formattedCharSeq = indicator.visualOrderText
         val textWidth = font.width(formattedCharSeq)
         val textX = -textWidth / 2f
-        val color = INDICATOR_COLOR
+        val color = if (isFailed) INDICATOR_FAILED_COLOR else INDICATOR_COLOR
 
         poseStack.pushPose()
         poseStack.mulPose(transformation)
@@ -238,9 +243,18 @@ object SignTooltipRenderer {
         val sign = level.getBlockEntity(state.blockPos) as? SignBlockEntity ?: return null
         val frontOutcome = SignTranslationManager.getOutcome(sign, true)
         val backOutcome = SignTranslationManager.getOutcome(sign, false)
+        val isFrontFailed = frontOutcome == null && SignTranslationManager.isFailed(sign, true)
+        val isBackFailed = backOutcome == null && SignTranslationManager.isFailed(sign, false)
         val isFront = mc.player?.let { sign.isFacingFrontText(it) } ?: true
         val isHanging = sign is HangingSignBlockEntity || state is HangingSignRenderState
-        return SignRenderOutcomeData(frontOutcome, backOutcome, isFront, isHanging)
+        return SignRenderOutcomeData(
+            frontOutcome = frontOutcome,
+            backOutcome = backOutcome,
+            isFacingFront = isFront,
+            isHanging = isHanging,
+            isFrontFailed = isFrontFailed,
+            isBackFailed = isBackFailed,
+        )
     }
 
     private fun isFacingFront(

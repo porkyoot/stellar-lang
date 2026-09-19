@@ -18,6 +18,7 @@ object SignTranslationManager {
     // Cache is strictly for TEXT: "$targetLang::$sentence" -> SignFormatHelper.SignTranslationOutcome
     internal val textOutcomeCache = ConcurrentHashMap<String, SignFormatHelper.SignTranslationOutcome>()
     internal val signCache = ConcurrentHashMap<String, SignText>()
+    internal val failedSignKeys = ConcurrentHashMap.newKeySet<String>()
 
     private fun buildTextKey(targetLang: String, sentence: String): String = "$targetLang$KEY_DELIMITER$sentence"
 
@@ -30,7 +31,7 @@ object SignTranslationManager {
         translateSignText(signText)
     }
 
-    @Suppress("CognitiveComplexMethod")
+    @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod")
     fun translateSignText(signText: SignText) {
         val config = TranslationService.getConfig()
         if (!config.enabled.value() || !config.translateSigns.value()) return
@@ -45,6 +46,7 @@ object SignTranslationManager {
         if (cached != null) {
             if (!cached.isSameLanguage && !textOutcomeCache.containsKey(textKey)) {
                 textOutcomeCache[textKey] = applyTranslatedLinesWithOutcome(signText, cached.translatedText)
+                failedSignKeys.remove(textKey)
             }
             return
         }
@@ -52,8 +54,25 @@ object SignTranslationManager {
         TranslationService.translateAsync(sentence) { result ->
             if (result != null && !result.isSameLanguage) {
                 textOutcomeCache[textKey] = applyTranslatedLinesWithOutcome(signText, result.translatedText)
+                failedSignKeys.remove(textKey)
+            } else if (result == null) {
+                failedSignKeys.add(textKey)
             }
         }
+    }
+
+    fun isFailed(signText: SignText): Boolean {
+        val sentence = extractSentence(signText)
+        if (sentence.isBlank()) return false
+        val targetLang = TranslationService.getTargetLanguage()
+        val textKey = buildTextKey(targetLang, sentence)
+        if (textOutcomeCache.containsKey(textKey)) return false
+        return failedSignKeys.contains(textKey) || TranslationService.isFailed(sentence, targetLang)
+    }
+
+    fun isFailed(sign: SignBlockEntity, isFront: Boolean): Boolean {
+        val text = if (isFront) sign.frontText else sign.backText
+        return isFailed(text)
     }
 
     @Suppress("ReturnCount")
@@ -130,6 +149,7 @@ object SignTranslationManager {
     fun clearCache() {
         textOutcomeCache.clear()
         signCache.clear()
+        failedSignKeys.clear()
     }
 
     fun applyTranslatedLines(originalText: SignText, translatedSentence: String): SignText {

@@ -237,13 +237,11 @@ object OnnxModelManager {
                 }
             }
 
-            if (targetFile.exists()) {
-                targetFile.delete()
-            }
-            if (!tempFile.renameTo(targetFile)) {
-                tempFile.copyTo(targetFile, overwrite = true)
-                tempFile.delete()
-            }
+            java.nio.file.Files.move(
+                tempFile.toPath(),
+                targetFile.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+            )
             progressCallback(100)
         } catch (ex: Exception) {
             if (tempFile.exists()) tempFile.delete()

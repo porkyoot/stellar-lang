@@ -173,4 +173,40 @@ class SignTranslationManagerSpec : FunSpec({
         trans1!!.getMessage(0, false).string shouldBe "Royal Castle"
         trans2!!.getMessage(0, false).string shouldBe "Bakery"
     }
+
+    test("isFailed returns true when translation fails") {
+        var signText = SignText()
+        signText = signText.setMessage(0, Component.literal("Inconnu"))
+
+        SignTranslationManager.isFailed(signText) shouldBe false
+
+        val config = TranslationService.getConfig()
+        config.apiHost.setValue("http://127.0.0.1:1", false)
+
+        SignTranslationManager.translateSignText(signText)
+
+        var attempts = 0
+        while (attempts++ < 30 && !SignTranslationManager.isFailed(signText)) {
+            Thread.sleep(50)
+        }
+
+        SignTranslationManager.isFailed(signText) shouldBe true
+
+        val unsafeField = sun.misc.Unsafe::class.java.getDeclaredField("theUnsafe")
+        unsafeField.isAccessible = true
+        val unsafe = unsafeField.get(null) as sun.misc.Unsafe
+        val sign = unsafe.allocateInstance(net.minecraft.world.level.block.entity.SignBlockEntity::class.java)
+            as net.minecraft.world.level.block.entity.SignBlockEntity
+        val frontTextField = net.minecraft.world.level.block.entity.SignBlockEntity::class.java
+            .getDeclaredField("frontText")
+        frontTextField.isAccessible = true
+        frontTextField.set(sign, signText)
+        val backTextField = net.minecraft.world.level.block.entity.SignBlockEntity::class.java
+            .getDeclaredField("backText")
+        backTextField.isAccessible = true
+        backTextField.set(sign, SignText())
+
+        SignTranslationManager.isFailed(sign, isFront = true) shouldBe true
+        SignTranslationManager.isFailed(sign, isFront = false) shouldBe false
+    }
 })

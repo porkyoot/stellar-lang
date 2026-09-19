@@ -75,11 +75,29 @@ class SignEditPreviewManagerSpec : FunSpec({
         }
     }
 
-    test("clear resets preview state") {
+    test("updateRealtimeTranslation sets hasFailed when translation fails") {
+        val config = TranslationService.getConfig()
+        config.apiHost.setValue("http://127.0.0.1:1", false) // Unreachable port
+
+        SignEditPreviewManager.updateRealtimeTranslation("Bonjour le monde")
+        SignEditPreviewManager.lastRequestTime = System.currentTimeMillis() - 300L
+        SignEditPreviewManager.updateRealtimeTranslation("Bonjour le monde")
+
+        var attempts = 0
+        while (attempts++ < 30 && SignEditPreviewManager.isTranslating.get()) {
+            Thread.sleep(50)
+        }
+
+        SignEditPreviewManager.hasFailed.get() shouldBe true
+        SignEditPreviewManager.currentTranslatedText shouldBe ""
+    }
+
+    test("clear resets preview state including hasFailed") {
         SignEditPreviewManager.lastRequestedText = "Some Text"
         SignEditPreviewManager.lastRequestTime = 12_345L
         SignEditPreviewManager.currentTranslatedText = "Translated"
         SignEditPreviewManager.isTranslating.set(true)
+        SignEditPreviewManager.hasFailed.set(true)
 
         SignEditPreviewManager.clear()
 
@@ -87,5 +105,6 @@ class SignEditPreviewManagerSpec : FunSpec({
         SignEditPreviewManager.lastRequestTime shouldBe 0L
         SignEditPreviewManager.currentTranslatedText shouldBe ""
         SignEditPreviewManager.isTranslating.get() shouldBe false
+        SignEditPreviewManager.hasFailed.get() shouldBe false
     }
 })

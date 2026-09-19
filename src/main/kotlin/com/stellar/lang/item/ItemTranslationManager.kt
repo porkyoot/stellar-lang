@@ -2,7 +2,6 @@ package com.stellar.lang.item
 
 import com.stellar.lang.input.StellarLangInputHandler
 import com.stellar.lang.service.TranslationService
-import net.minecraft.ChatFormatting
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.MutableComponent
 import net.minecraft.world.item.ItemStack
@@ -41,6 +40,7 @@ object ItemTranslationManager {
         return if (text.length < MIN_TRANSLATABLE_LENGTH || text.startsWith("[T]")) null else text
     }
 
+    @Suppress("ReturnCount")
     private fun resolveItemTranslation(
         plainText: String,
         targetLang: String,
@@ -55,16 +55,29 @@ object ItemTranslationManager {
             return comp
         }
 
+        if (TranslationService.isFailed(plainText, targetLang)) {
+            val failedComp = createFailedName(plainText)
+            itemCache[cacheKey] = failedComp
+            return failedComp
+        }
+
         TranslationService.translateAsync(plainText) { result ->
             if (result != null && !result.isSameLanguage) {
                 itemCache[cacheKey] = createFormattedName(result.translatedText)
+            } else if (result == null && TranslationService.isFailed(plainText, targetLang)) {
+                itemCache[cacheKey] = createFailedName(plainText)
             }
         }
         return original
     }
 
     private fun createFormattedName(translatedText: String): MutableComponent {
-        val badge = Component.literal("[T] ").withStyle(ChatFormatting.AQUA).withStyle(ChatFormatting.BOLD)
+        val badge = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(failed = false, trailingSpace = true)
         return Component.empty().append(badge).append(Component.literal(translatedText))
+    }
+
+    private fun createFailedName(originalText: String): MutableComponent {
+        val badge = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(failed = true, trailingSpace = true)
+        return Component.empty().append(badge).append(Component.literal(originalText))
     }
 }

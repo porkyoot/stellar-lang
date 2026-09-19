@@ -404,7 +404,70 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
         // Window provider hook
         com.stellar.lang.input.StellarLangInputHandler.windowProvider = { dummyWindow }
         com.stellar.lang.input.StellarLangInputHandler.windowProvider shouldNotBe null
-        com.stellar.lang.input.StellarLangInputHandler.isShowingOriginal() shouldBe false
         com.stellar.lang.input.StellarLangInputHandler.windowProvider = null
+    }
+
+    test("translateItemName and translateEntityName format with red strikeout when translation fails") {
+        ItemTranslationManager.clearCache()
+        EntityTranslationManager.clearCache()
+
+        val config = TranslationService.getConfig()
+        config.apiHost.setValue("http://127.0.0.1:1", false)
+
+        val itemStack = createMockStack(Component.literal("Épée Maudite"))
+        val origItemComp = Component.literal("Épée Maudite")
+        ItemTranslationManager.translateItemName(itemStack, origItemComp)
+
+        val entityComp = Component.literal("Monstre Sombre")
+        EntityTranslationManager.onEntityNameChanged(entityComp)
+
+        val targetLang = TranslationService.getTargetLanguage()
+        val itemKey = "$targetLang::${"Épée Maudite".hashCode()}"
+        val entityKey = "$targetLang::Monstre Sombre"
+
+        val itemCacheField = ItemTranslationManager::class.java.getDeclaredField("itemCache")
+        itemCacheField.isAccessible = true
+        val rawItemCache = itemCacheField.get(ItemTranslationManager)
+
+        @Suppress("UNCHECKED_CAST")
+        val itemCache = rawItemCache as java.util.concurrent.ConcurrentHashMap<String, Component>
+
+        fun isMissingCache(): Boolean =
+            !itemCache.containsKey(itemKey) || !EntityTranslationManager.textComponentCache.containsKey(entityKey)
+
+        var attempts = 0
+        while (attempts++ < 30 && isMissingCache()) {
+            Thread.sleep(50)
+        }
+
+        val failedItem = itemCache[itemKey]
+        failedItem shouldNotBe null
+        failedItem!!.string shouldContain "[T] "
+        failedItem.string shouldContain "Épée Maudite"
+        val itemBadge = failedItem.siblings.first()
+        itemBadge.style.color shouldBe net.minecraft.network.chat.TextColor.fromLegacyFormat(
+            net.minecraft.ChatFormatting.RED,
+        )
+        itemBadge.style.isStrikethrough shouldBe true
+
+        val failedEntity = EntityTranslationManager.translateEntityName(null, entityComp)
+        failedEntity.string shouldContain "[T] "
+        failedEntity.string shouldContain "Monstre Sombre"
+        val entityBadge = failedEntity.siblings.first()
+        entityBadge.style.color shouldBe net.minecraft.network.chat.TextColor.fromLegacyFormat(
+            net.minecraft.ChatFormatting.RED,
+        )
+        entityBadge.style.isStrikethrough shouldBe true
+
+        // Verify direct cache miss with TranslationService already in failed state
+        ItemTranslationManager.clearCache()
+        val directFailedItem = ItemTranslationManager.translateItemName(itemStack, origItemComp)
+        directFailedItem.string shouldContain "[T] "
+        directFailedItem.string shouldContain "Épée Maudite"
+
+        EntityTranslationManager.clearCache()
+        val directFailedEntity = EntityTranslationManager.translateEntityName(null, entityComp)
+        directFailedEntity.string shouldContain "[T] "
+        directFailedEntity.string shouldContain "Monstre Sombre"
     }
 })

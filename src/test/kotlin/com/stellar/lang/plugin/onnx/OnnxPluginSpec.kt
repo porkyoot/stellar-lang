@@ -12,7 +12,7 @@ class OnnxPluginSpec : FunSpec({
     beforeEach {
         val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")
             ?: ConfigManager.register(StellarLangMod.MOD_ID, "main", StellarLangConfig::class.java)
-        config.onnxModelDir.setValue("config/stellar_lang/models", false)
+        config.onnxModelDir.setValue("build/no_models", false)
         config.targetLanguage.setValue("en", false)
         config.onnxAutoDownload.setValue(false, false)
         OnnxInferenceEngine.resetSessions()

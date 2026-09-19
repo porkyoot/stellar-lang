@@ -457,6 +457,13 @@ object TranslationService {
 
     fun isThrottled(key: String): Boolean = TranslationCache.isThrottled(key)
 
+    fun isFailed(text: String): Boolean = isFailed(text, getTargetLanguage())
+
+    fun isFailed(text: String, targetLang: String): Boolean {
+        val key = cacheKey(text, targetLang)
+        return TranslationCache.isFailed(key) || TranslationCache.isCircuitBreakerOpen()
+    }
+
     fun cacheKey(text: String, targetLang: String): String = TranslationCache.cacheKey(text, targetLang)
 
     fun clearCache() {

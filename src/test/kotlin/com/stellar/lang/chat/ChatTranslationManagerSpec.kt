@@ -8,7 +8,9 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
+import net.minecraft.ChatFormatting
 import net.minecraft.network.chat.Component
+import net.minecraft.network.chat.TextColor
 
 class ChatTranslationManagerSpec : FunSpec({
     beforeEach {
@@ -483,5 +485,111 @@ class ChatTranslationManagerSpec : FunSpec({
         val payload = ChatTranslationManager.extractChatPayload(blankAfterPrefix)
         payload.prefixComponent shouldBe null
         payload.messageText shouldBe "<Player>"
+    }
+
+    test("createFailedComponent generates red strikethrough bold badge") {
+        val comp = ChatTranslationManager.createFailedComponent(123L, "Untranslatable text")
+        comp.string shouldContain "[T] "
+        comp.string shouldContain "Untranslatable text"
+        val badge = comp.siblings.first()
+        badge.style.color shouldBe TextColor.fromLegacyFormat(ChatFormatting.RED)
+        badge.style.isBold shouldBe true
+        badge.style.isStrikethrough shouldBe true
+    }
+
+    test("processIncomingMessage marks chat message failed when translation fails") {
+        val config = TranslationService.getConfig()
+        config.apiHost.setValue("http://127.0.0.1:1", false)
+
+        var refreshedTracked: ChatTranslationManager.TrackedChatMessage? = null
+        ChatTranslationManager.refreshScheduler = { refreshedTracked = it }
+
+        val input = Component.literal("Bonjour les amis")
+        val resultComp = ChatTranslationManager.processIncomingMessage(input)
+        resultComp shouldBe input
+
+        var attempts = 0
+        while (attempts++ < 30 && refreshedTracked?.translatedComponent == null) {
+            Thread.sleep(50)
+        }
+
+        val failedComp = refreshedTracked?.translatedComponent
+        failedComp shouldNotBe null
+        failedComp!!.string shouldContain "[T] "
+        failedComp.string shouldContain "Bonjour les amis"
+        val badge = failedComp.siblings.first()
+        badge.style.color shouldBe TextColor.fromLegacyFormat(ChatFormatting.RED)
+        badge.style.isStrikethrough shouldBe true
+    }
+
+    test("createFailedComponent with prefix component attaches prefix cleanly") {
+        val prefix = Component.literal("<Alice> ")
+        val comp = ChatTranslationManager.createFailedComponent(124L, "Error msg", prefix)
+        comp.string shouldContain "<Alice> "
+        comp.string shouldContain "Error msg"
+    }
+
+    test("processIncomingMessage immediately returns failed component if already failed in cache") {
+        val key = TranslationService.cacheKey("Echec immediat", "en")
+        TranslationService.isFailed("Echec immediat", "en") shouldBe false
+        com.stellar.lang.service.TranslationCache.markFailed(key)
+
+        val input = Component.literal("Echec immediat")
+        val resultComp = ChatTranslationManager.processIncomingMessage(input)
+        resultComp.string shouldContain "[T] "
+        resultComp.string shouldContain "Echec immediat"
+        val badge = resultComp.siblings.first()
+        badge.style.color shouldBe TextColor.fromLegacyFormat(ChatFormatting.RED)
+        badge.style.isStrikethrough shouldBe true
+    }
+
+    test("scheduleChatRefresh falls back to custom minecraftExecutor and chatAccessorProvider") {
+        ChatTranslationManager.refreshScheduler = null
+        var executed = false
+        ChatTranslationManager.minecraftExecutor = { runnable ->
+            runnable.run()
+            executed = true
+        }
+
+        var accessorCalled = false
+        val messageList = mutableListOf<net.minecraft.client.multiplayer.chat.GuiMessage>()
+        val dummyMsg = net.minecraft.client.multiplayer.chat.GuiMessage(
+            1,
+            Component.literal("Refresh Target"),
+            null,
+            net.minecraft.client.multiplayer.chat.GuiMessageSource.SYSTEM_CLIENT,
+            null,
+        )
+        messageList.add(dummyMsg)
+
+        val fakeAccessor = object : com.stellar.lang.mixin.ChatComponentAccessor {
+            override fun stellarGetAllMessages(): MutableList<net.minecraft.client.multiplayer.chat.GuiMessage> {
+                accessorCalled = true
+                return messageList
+            }
+            override fun stellarRefreshTrimmedMessages() {
+                // No-op for test
+            }
+        }
+        ChatTranslationManager.chatAccessorProvider = { fakeAccessor }
+
+        val tracked = ChatTranslationManager.TrackedChatMessage(
+            id = 555L,
+            originalComponent = Component.literal("Refresh Target"),
+            plainText = "Refresh Target",
+            translatedComponent = Component.literal("Refreshed"),
+        )
+
+        val method = ChatTranslationManager::class.java.getDeclaredMethod(
+            "scheduleChatRefresh",
+            ChatTranslationManager.TrackedChatMessage::class.java,
+        )
+        method.isAccessible = true
+        method.invoke(ChatTranslationManager, tracked)
+
+        executed shouldBe true
+        accessorCalled shouldBe true
+        ChatTranslationManager.minecraftExecutor = null
+        ChatTranslationManager.chatAccessorProvider = null
     }
 })
