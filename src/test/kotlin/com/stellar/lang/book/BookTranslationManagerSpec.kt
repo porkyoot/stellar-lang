@@ -1,5 +1,6 @@
 package com.stellar.lang.book
 
+import com.stellar.lang.service.TranslationCache
 import com.stellar.lang.service.TranslationResult
 import com.stellar.lang.service.TranslationService
 import io.kotest.core.spec.style.FunSpec
@@ -163,5 +164,74 @@ class BookTranslationManagerSpec : FunSpec({
         translatedAccess!!.pageCount shouldBe 2
         translatedAccess!!.getPage(0).string shouldBe "Chapter One"
         translatedAccess!!.getPage(1).string shouldBe "Chapter Two in English"
+    }
+
+    test("translateBookDetailedAsync returns Failure with original access when translation fails") {
+        val originalPages = listOf(Component.literal("Bonjour monde"))
+        val book = BookViewScreen.BookAccess(originalPages)
+
+        TranslationCache.tripCircuitBreaker(60_000L)
+        try {
+            val latch = CountDownLatch(1)
+            var detailedResult: BookTranslationResult? = null
+            BookTranslationManager.translateBookDetailedAsync(book) { res ->
+                detailedResult = res
+                latch.countDown()
+            }
+            latch.await(2, TimeUnit.SECONDS) shouldBe true
+            val result = requireNotNull(detailedResult)
+            result.isSameLanguage shouldBe false
+            result.isFailed shouldBe true
+            result.access shouldNotBe null
+            result.access?.getPage(0)?.string shouldBe "Bonjour monde"
+
+            // Second call without forceRetry returns cached result
+            val latch2 = CountDownLatch(1)
+            var cachedResult: BookTranslationResult? = null
+            BookTranslationManager.translateBookDetailedAsync(book, forceRetry = false) { res ->
+                cachedResult = res
+                latch2.countDown()
+            }
+            latch2.await(2, TimeUnit.SECONDS) shouldBe true
+            cachedResult shouldBe detailedResult
+
+            // forceRetry = true bypasses cache
+            val latch3 = CountDownLatch(1)
+            var retryResult: BookTranslationResult? = null
+            BookTranslationManager.translateBookDetailedAsync(book, forceRetry = true) { res ->
+                retryResult = res
+                latch3.countDown()
+            }
+            latch3.await(2, TimeUnit.SECONDS) shouldBe true
+            retryResult shouldNotBe null
+        } finally {
+            TranslationCache.resetCircuitBreaker()
+        }
+    }
+
+    test("translateBookDetailedAsync returns SameLanguage when detected is target language") {
+        val originalPages = listOf(Component.literal("English text"))
+        val book = BookViewScreen.BookAccess(originalPages)
+
+        val sameResult = TranslationResult(
+            originalText = "English text",
+            translatedText = "English text",
+            detectedLanguage = "en",
+            targetLanguage = "en",
+            isSameLanguage = true,
+        )
+        TranslationService.putCache(sameResult)
+
+        val latch = CountDownLatch(1)
+        var res: BookTranslationResult? = null
+        BookTranslationManager.translateBookDetailedAsync(book) { r ->
+            res = r
+            latch.countDown()
+        }
+        latch.await(2, TimeUnit.SECONDS) shouldBe true
+        val finalRes = requireNotNull(res)
+        finalRes.isSameLanguage shouldBe true
+        finalRes.isFailed shouldBe false
+        finalRes.access shouldBe null
     }
 })

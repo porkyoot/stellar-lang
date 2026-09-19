@@ -40,6 +40,7 @@ private const val MAX_OFFSET = 130f
 private const val OFFSET_WIDTH_MARGIN = 115f
 private const val MIN_OFFSET_FALLBACK = 60f
 private const val TOP_MARGIN_WITH_HEADER = 16
+private const val BOOK_RETRY_INTERVAL_MS = 15_000L
 
 /**
  * Mixin into BookViewScreen to add a non-editable translated book on the side
@@ -70,6 +71,15 @@ abstract class BookViewScreenMixin : Screen(Component.empty()) {
     private var isTranslating: Boolean = false
 
     @Unique
+    private var showDualBookState: Boolean = false
+
+    @Unique
+    private var isFailed: Boolean = false
+
+    @Unique
+    private var lastRetryTime: Long = 0L
+
+    @Unique
     private var doneButton: Button? = null
 
     @Unique
@@ -87,7 +97,7 @@ abstract class BookViewScreenMixin : Screen(Component.empty()) {
     @Unique
     private fun shouldShowDualBook(): Boolean {
         val config = TranslationService.getConfig()
-        return config.enabled.value() && config.translateBooks.value() && translatedAccess != null
+        return config.enabled.value() && config.translateBooks.value() && showDualBookState
     }
 
     @Unique
@@ -132,26 +142,55 @@ abstract class BookViewScreenMixin : Screen(Component.empty()) {
         }
     }
 
+    @Unique
+    private fun shouldActivateDualBook(orig: BookViewScreen.BookAccess): Boolean {
+        val pages = orig.pages().map { it.string.trim() }
+        if (pages.isEmpty() || pages.all { it.isBlank() }) return false
+        val sample = pages.firstOrNull { it.isNotBlank() } ?: return false
+        val quickLang = TranslationService.detectLanguageQuick(sample)
+        val targetLang = TranslationService.getTargetLanguage()
+        return quickLang == null || !quickLang.equals(targetLang, ignoreCase = true)
+    }
+
     @Inject(method = ["init"], at = [At("TAIL")])
     private fun stellarOnInit(ci: CallbackInfo) {
         val config = TranslationService.getConfig()
         if (!config.enabled.value() || !config.translateBooks.value()) return
 
-        if (originalAccess == null) {
-            originalAccess = bookAccess
+        val orig = originalAccess ?: bookAccess.also { originalAccess = it }
+        if (!shouldActivateDualBook(orig)) {
+            showDualBookState = false
+            return
         }
-        val orig = originalAccess ?: return
 
-        setupTranslatedBookWidget()
-
+        showDualBookState = true
         isTranslating = true
-        BookTranslationManager.translateBookAsync(orig) { translated ->
-            isTranslating = false
-            if (translated != null) {
-                translatedAccess = translated
-                minecraft.execute {
-                    updateLayout()
+        isFailed = false
+        setupTranslatedBookWidget()
+        requestBookTranslation(orig, forceRetry = false)
+    }
+
+    @Unique
+    private fun requestBookTranslation(orig: BookViewScreen.BookAccess, forceRetry: Boolean) {
+        isTranslating = true
+        BookTranslationManager.translateBookDetailedAsync(orig, forceRetry) { result ->
+            val mc = this.minecraft ?: runCatching { net.minecraft.client.Minecraft.getInstance() }.getOrNull()
+            mc?.execute {
+                isTranslating = false
+                if (result.isSameLanguage) {
+                    showDualBookState = false
+                    translatedAccess = null
+                    isFailed = false
+                } else if (result.isFailed) {
+                    showDualBookState = true
+                    isFailed = true
+                    translatedAccess = orig
+                } else {
+                    showDualBookState = true
+                    isFailed = false
+                    translatedAccess = result.access
                 }
+                updateLayout()
             }
         }
     }
@@ -225,6 +264,15 @@ abstract class BookViewScreenMixin : Screen(Component.empty()) {
     ) {
         if (!shouldShowDualBook()) return
 
+        if (isFailed && !isTranslating) {
+            val now = System.currentTimeMillis()
+            if (now - lastRetryTime >= BOOK_RETRY_INTERVAL_MS) {
+                lastRetryTime = now
+                val orig = originalAccess ?: bookAccess
+                requestBookTranslation(orig, forceRetry = true)
+            }
+        }
+
         val config = TranslationService.getConfig()
         val hOffset = getHorizontalOffset()
         val origCenterX = this.width / SCREEN_HALF_DIVISOR - hOffset
@@ -242,7 +290,7 @@ abstract class BookViewScreenMixin : Screen(Component.empty()) {
 
         // Draw header above translated book
         val langCode = TranslationService.getTargetLanguage().uppercase()
-        val badge = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(failed = false, trailingSpace = true)
+        val badge = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(failed = isFailed, trailingSpace = true)
         val header = Component.empty().append(badge)
             .append(Component.literal("Translated ($langCode)").withStyle(ChatFormatting.WHITE))
         extractor.centeredText(this.font, header, rightCenterX.toInt(), headerY, HEADER_WHITE_COLOR)

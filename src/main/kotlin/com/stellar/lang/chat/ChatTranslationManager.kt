@@ -43,6 +43,23 @@ object ChatTranslationManager {
     @Volatile
     var chatAccessorProvider: (() -> ChatComponentAccessor?)? = null
 
+    init {
+        TranslationService.addSuccessListener { result ->
+            onTranslationSuccess(result)
+        }
+    }
+
+    internal fun onTranslationSuccess(result: TranslationResult) {
+        if (result.isSameLanguage) return
+        for (tracked in trackedMessages.values) {
+            if (tracked.messageText == result.originalText) {
+                val translated = createTranslatedComponent(tracked.id, result, tracked.prefixComponent)
+                tracked.translatedComponent = translated
+                scheduleChatRefresh(tracked)
+            }
+        }
+    }
+
     data class ParsedChatPayload(
         val prefixComponent: Component?,
         val messageText: String,
@@ -347,5 +364,9 @@ object ChatTranslationManager {
         tracked.isShowingOriginal = !tracked.isShowingOriginal
         updateChatDisplay(tracked)
         return true
+    }
+
+    fun clearCache() {
+        trackedMessages.clear()
     }
 }

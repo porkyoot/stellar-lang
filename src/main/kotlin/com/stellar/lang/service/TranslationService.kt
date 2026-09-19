@@ -20,7 +20,10 @@ import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * Service managing communication with LibreTranslate API, caching, and language detection.
@@ -32,6 +35,7 @@ object TranslationService {
     private const val CONNECT_TIMEOUT_SECONDS = 4L
     private const val TIMEOUT_SECONDS = 5L
     private const val THREAD_POOL_SIZE = 3
+    private const val RETRY_INTERVAL_SECONDS = 15L
     private const val HTTP_OK_MIN = 200
     private const val HTTP_OK_MAX = 299
     private const val HTTP_TOO_MANY_REQUESTS = 429
@@ -47,6 +51,28 @@ object TranslationService {
 
     private val executor = Executors.newFixedThreadPool(THREAD_POOL_SIZE) { runnable ->
         Thread(runnable, "StellarLang-Worker").apply { isDaemon = true }
+    }
+
+    private val retryExecutor = Executors.newSingleThreadScheduledExecutor { runnable ->
+        Thread(runnable, "StellarLang-RetryWorker").apply { isDaemon = true }
+    }
+
+    data class FailedRequest(
+        val text: String,
+        val targetLang: String,
+        val failedAt: Long,
+    )
+
+    internal val failedRequests = ConcurrentHashMap<String, FailedRequest>()
+    private val successListeners = CopyOnWriteArrayList<(TranslationResult) -> Unit>()
+
+    init {
+        retryExecutor.scheduleWithFixedDelay(
+            { runCatching { retryFailedTranslations() } },
+            RETRY_INTERVAL_SECONDS,
+            RETRY_INTERVAL_SECONDS,
+            TimeUnit.SECONDS,
+        )
     }
 
     private const val MIN_LANG_CODE_LENGTH = 2
@@ -142,12 +168,15 @@ object TranslationService {
             val result = executeTranslation(trimmed, targetLang)
             if (result != null) {
                 TranslationCache.put(result)
+                failedRequests.remove(key)
+                notifySuccess(result)
             } else {
                 val transStatus = PluginRegistry.getActiveTranslator().getStatus()
                 val detStatus = PluginRegistry.getActiveDetector().getStatus()
                 val isDownloading = transStatus is PluginStatus.Downloading || detStatus is PluginStatus.Downloading
                 if (!isDownloading) {
                     TranslationCache.markFailed(key)
+                    failedRequests[key] = FailedRequest(trimmed, targetLang, System.currentTimeMillis())
                 }
             }
             TranslationCache.completeInFlight(key, result)
@@ -472,8 +501,52 @@ object TranslationService {
 
     fun cacheKey(text: String, targetLang: String): String = TranslationCache.cacheKey(text, targetLang)
 
+    fun addSuccessListener(listener: (TranslationResult) -> Unit) {
+        successListeners.add(listener)
+    }
+
+    fun removeSuccessListener(listener: (TranslationResult) -> Unit) {
+        successListeners.remove(listener)
+    }
+
+    internal fun notifySuccess(result: TranslationResult) {
+        for (listener in successListeners) {
+            runCatching { listener(result) }
+        }
+    }
+
+    fun retryFailedTranslations() {
+        if (TranslationCache.isCircuitBreakerOpen()) return
+        val transStatus = PluginRegistry.getActiveTranslator().getStatus()
+        val detStatus = PluginRegistry.getActiveDetector().getStatus()
+        if (transStatus is PluginStatus.Downloading || detStatus is PluginStatus.Downloading) return
+
+        val currentTargetLang = getTargetLanguage()
+        val now = System.currentTimeMillis()
+        val entriesToRetry = failedRequests.entries.filter { (_, req) ->
+            req.targetLang == currentTargetLang && now - req.failedAt >= TranslationCache.ERROR_COOLDOWN_MS
+        }
+
+        for ((key, req) in entriesToRetry) {
+            failedRequests.remove(key)
+            TranslationCache.removeFailed(key)
+            translateAsync(req.text) { /* completion triggers notifySuccess or re-registers failedRequest */ }
+        }
+    }
+
+    fun detectLanguageQuick(text: String): String? {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return null
+        val cached = TranslationCache.get(trimmed, getTargetLanguage())
+        val detector = PluginRegistry.getActiveDetector()
+        return cached?.detectedLanguage
+            ?: (detector as? com.stellar.lang.plugin.onnx.OnnxLanguageDetectorPlugin)
+                ?.let { com.stellar.lang.plugin.onnx.OnnxInferenceEngine.detectLanguage(trimmed) }
+    }
+
     fun clearCache() {
         TranslationCache.clear()
+        failedRequests.clear()
     }
 
     fun testConnection(

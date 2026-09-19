@@ -6,31 +6,58 @@ import net.minecraft.client.gui.screens.inventory.BookViewScreen
 import net.minecraft.network.chat.Component
 import java.util.concurrent.ConcurrentHashMap
 
+data class BookTranslationResult(
+    val access: BookViewScreen.BookAccess?,
+    val isSameLanguage: Boolean,
+    val isFailed: Boolean,
+    val detectedLanguage: String?,
+    val targetLanguage: String,
+)
+
 /**
  * Manages translation of written and writable books page-by-page using batch translation.
  */
 object BookTranslationManager {
     private val translatedBooks = ConcurrentHashMap<String, BookViewScreen.BookAccess>()
+    private val resultCache = ConcurrentHashMap<String, BookTranslationResult>()
 
     fun translateBookAsync(bookAccess: BookViewScreen.BookAccess, callback: (BookViewScreen.BookAccess?) -> Unit) {
+        translateBookDetailedAsync(bookAccess) { result ->
+            callback(result.access)
+        }
+    }
+
+    fun translateBookDetailedAsync(
+        bookAccess: BookViewScreen.BookAccess,
+        forceRetry: Boolean = false,
+        callback: (BookTranslationResult) -> Unit,
+    ) {
         val originalPages = bookAccess.pages()
         val pageTexts = originalPages.map { it.string.trim() }
+        val targetLang = TranslationService.getTargetLanguage()
 
         if (!isTranslationEligible(pageTexts)) {
-            callback(null)
+            val emptyResult = BookTranslationResult(
+                access = null,
+                isSameLanguage = true,
+                isFailed = false,
+                detectedLanguage = null,
+                targetLanguage = targetLang,
+            )
+            callback(emptyResult)
             return
         }
 
-        val config = TranslationService.getConfig()
-        val targetLang = TranslationService.getTargetLanguage()
         val cacheKey = "$targetLang::${pageTexts.joinToString("||") { it.hashCode().toString() }}"
-        val cached = translatedBooks[cacheKey]
-        if (cached != null) {
-            callback(cached)
-            return
+        if (!forceRetry) {
+            val cached = resultCache[cacheKey]
+            if (cached != null) {
+                callback(cached)
+                return
+            }
         }
 
-        dispatchBatchTranslation(originalPages, pageTexts, cacheKey, callback)
+        dispatchBatchTranslationDetailed(originalPages, pageTexts, cacheKey, callback)
     }
 
     private fun isTranslationEligible(pageTexts: List<String>): Boolean {
@@ -39,29 +66,63 @@ object BookTranslationManager {
         return enabled && pageTexts.isNotEmpty() && pageTexts.any { it.isNotBlank() }
     }
 
-    private fun dispatchBatchTranslation(
+    private fun dispatchBatchTranslationDetailed(
         originalPages: List<Component>,
         pageTexts: List<String>,
         cacheKey: String,
-        callback: (BookViewScreen.BookAccess?) -> Unit,
+        callback: (BookTranslationResult) -> Unit,
     ) {
+        val targetLang = TranslationService.getTargetLanguage()
         TranslationService.translateBatchAsync(pageTexts) { results ->
-            val access = processBatchResults(originalPages, results)
-            if (access != null) {
-                translatedBooks[cacheKey] = access
+            val detailedResult = processBatchResultsDetailed(originalPages, pageTexts, results, targetLang)
+            resultCache[cacheKey] = detailedResult
+            if (detailedResult.access != null && !detailedResult.isFailed) {
+                translatedBooks[cacheKey] = detailedResult.access
             }
-            callback(access)
+            callback(detailedResult)
         }
     }
 
-    private fun processBatchResults(
+    private fun createFallbackResult(
         originalPages: List<Component>,
-        results: List<TranslationResult>?,
-    ): BookViewScreen.BookAccess? {
-        if (results.isNullOrEmpty()) return null
+        pageTexts: List<String>,
+        targetLang: String,
+    ): BookTranslationResult {
+        val firstNonBlank = pageTexts.firstOrNull { it.isNotBlank() } ?: ""
+        val detected = TranslationService.detectLanguageQuick(firstNonBlank) ?: "unknown"
+        val isSame = detected.equals(targetLang, ignoreCase = true)
+        return BookTranslationResult(
+            access = if (isSame) null else BookViewScreen.BookAccess(originalPages),
+            isSameLanguage = isSame,
+            isFailed = !isSame,
+            detectedLanguage = detected,
+            targetLanguage = targetLang,
+        )
+    }
 
-        val hasAnyTranslation = results.any { isValidTranslation(it) }
-        if (!hasAnyTranslation) return null
+    private fun processBatchResultsDetailed(
+        originalPages: List<Component>,
+        pageTexts: List<String>,
+        results: List<TranslationResult>?,
+        targetLang: String,
+    ): BookTranslationResult {
+        if (results == null) {
+            return createFallbackResult(originalPages, pageTexts, targetLang)
+        }
+
+        val firstRes = results.firstOrNull()
+        val isAllSameLang = results.all { it.isSameLanguage }
+        val detected = firstRes?.detectedLanguage ?: targetLang
+
+        if (isAllSameLang) {
+            return BookTranslationResult(
+                access = null,
+                isSameLanguage = true,
+                isFailed = false,
+                detectedLanguage = detected,
+                targetLanguage = targetLang,
+            )
+        }
 
         val newPages = originalPages.mapIndexed { index, origComp ->
             val res = results.getOrNull(index)
@@ -71,7 +132,13 @@ object BookTranslationManager {
                 origComp
             }
         }
-        return BookViewScreen.BookAccess(newPages)
+        return BookTranslationResult(
+            access = BookViewScreen.BookAccess(newPages),
+            isSameLanguage = false,
+            isFailed = false,
+            detectedLanguage = detected,
+            targetLanguage = targetLang,
+        )
     }
 
     private fun isValidTranslation(res: TranslationResult): Boolean {
@@ -80,5 +147,6 @@ object BookTranslationManager {
 
     fun clearCache() {
         translatedBooks.clear()
+        resultCache.clear()
     }
 }

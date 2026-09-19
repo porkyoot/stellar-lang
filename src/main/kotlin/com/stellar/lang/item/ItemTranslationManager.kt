@@ -1,6 +1,7 @@
 package com.stellar.lang.item
 
 import com.stellar.lang.input.StellarLangInputHandler
+import com.stellar.lang.service.TranslationResult
 import com.stellar.lang.service.TranslationService
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.MutableComponent
@@ -13,9 +14,34 @@ import java.util.concurrent.ConcurrentHashMap
 object ItemTranslationManager {
     private const val MIN_TRANSLATABLE_LENGTH = 2
     private val itemCache = ConcurrentHashMap<String, Component>()
+    internal val failedItems = ConcurrentHashMap.newKeySet<String>()
+
+    init {
+        TranslationService.addSuccessListener { result ->
+            onTranslationSuccess(result)
+        }
+    }
+
+    internal fun onTranslationSuccess(result: TranslationResult) {
+        if (result.isSameLanguage) return
+        val targetLang = result.targetLanguage
+        val cacheKey = "$targetLang::${result.originalText.hashCode()}"
+        failedItems.remove(cacheKey)
+        itemCache[cacheKey] = createFormattedName(result.translatedText)
+    }
 
     fun clearCache() {
         itemCache.clear()
+        failedItems.clear()
+    }
+
+    private fun getValidCachedItem(cacheKey: String, plainText: String, targetLang: String): Component? {
+        val cached = itemCache[cacheKey] ?: return null
+        if (!failedItems.contains(cacheKey)) return cached
+        if (TranslationService.isFailed(plainText, targetLang)) return cached
+        failedItems.remove(cacheKey)
+        itemCache.remove(cacheKey)
+        return null
     }
 
     fun translateItemName(stack: ItemStack? = null, original: Component): Component {
@@ -26,7 +52,7 @@ object ItemTranslationManager {
         val targetLang = TranslationService.getTargetLanguage()
         val cacheKey = "$targetLang::${plainText.hashCode()}"
 
-        val cached = itemCache[cacheKey]
+        val cached = getValidCachedItem(cacheKey, plainText, targetLang)
         if (cached != null) return cached
 
         return resolveItemTranslation(plainText, targetLang, cacheKey, original)
@@ -51,20 +77,24 @@ object ItemTranslationManager {
         if (cachedResult != null) {
             if (cachedResult.isSameLanguage) return original
             val comp = createFormattedName(cachedResult.translatedText)
+            failedItems.remove(cacheKey)
             itemCache[cacheKey] = comp
             return comp
         }
 
         if (TranslationService.isFailed(plainText, targetLang)) {
             val failedComp = createFailedName(plainText)
+            failedItems.add(cacheKey)
             itemCache[cacheKey] = failedComp
             return failedComp
         }
 
         TranslationService.translateAsync(plainText) { result ->
             if (result != null && !result.isSameLanguage) {
+                failedItems.remove(cacheKey)
                 itemCache[cacheKey] = createFormattedName(result.translatedText)
             } else if (result == null && TranslationService.isFailed(plainText, targetLang)) {
+                failedItems.add(cacheKey)
                 itemCache[cacheKey] = createFailedName(plainText)
             }
         }

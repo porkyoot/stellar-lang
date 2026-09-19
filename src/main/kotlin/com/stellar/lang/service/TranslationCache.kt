@@ -19,7 +19,7 @@ import java.util.concurrent.ConcurrentHashMap
 object TranslationCache {
     private val logger: Logger = LoggerFactory.getLogger(StellarLangMod.MOD_ID)
     private val gson = Gson()
-    private const val ERROR_COOLDOWN_MS = 15_000L
+    const val ERROR_COOLDOWN_MS = 15_000L
     private const val DEFAULT_CIRCUIT_BREAKER_MS = 60_000L
     private const val INITIAL_CAPACITY = 16
     private const val LOAD_FACTOR = 0.75f
@@ -171,6 +171,12 @@ object TranslationCache {
     }
 
     fun isFailed(key: String): Boolean = isThrottled(key)
+
+    fun getFailedKeys(): Set<String> = failedAttempts.keys.toSet()
+
+    fun removeFailed(key: String) {
+        failedAttempts.remove(key)
+    }
 
     fun clear() {
         synchronized(cacheLock) {

@@ -281,6 +281,10 @@ object OnnxModelManager {
         runCatching {
             com.stellar.lang.service.TranslationCache.clear()
             com.stellar.lang.sign.SignTranslationManager.clearCache()
+            com.stellar.lang.item.ItemTranslationManager.clearCache()
+            com.stellar.lang.entity.EntityTranslationManager.clearCache()
+            com.stellar.lang.book.BookTranslationManager.clearCache()
+            com.stellar.lang.service.TranslationService.retryFailedTranslations()
         }
     }
 

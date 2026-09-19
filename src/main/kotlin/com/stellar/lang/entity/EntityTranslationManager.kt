@@ -1,6 +1,7 @@
 package com.stellar.lang.entity
 
 import com.stellar.lang.input.StellarLangInputHandler
+import com.stellar.lang.service.TranslationResult
 import com.stellar.lang.service.TranslationService
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.MutableComponent
@@ -15,6 +16,21 @@ object EntityTranslationManager {
 
     // Cache is strictly for TEXT: "$targetLang::$plainText" -> Component
     internal val textComponentCache = ConcurrentHashMap<String, Component>()
+    internal val failedEntities = ConcurrentHashMap.newKeySet<String>()
+
+    init {
+        TranslationService.addSuccessListener { result ->
+            onTranslationSuccess(result)
+        }
+    }
+
+    internal fun onTranslationSuccess(result: TranslationResult) {
+        if (result.isSameLanguage) return
+        val targetLang = result.targetLanguage
+        val textKey = "$targetLang::${result.originalText}"
+        failedEntities.remove(textKey)
+        textComponentCache[textKey] = createFormattedName(result.translatedText)
+    }
 
     fun onEntityLoaded(entity: Entity) {
         val customName = entity.customName ?: return
@@ -30,6 +46,7 @@ object EntityTranslationManager {
         val cachedResult = TranslationService.getCached(plainText, targetLang)
         if (cachedResult != null) {
             if (!cachedResult.isSameLanguage && !textComponentCache.containsKey(textKey)) {
+                failedEntities.remove(textKey)
                 textComponentCache[textKey] = createFormattedName(cachedResult.translatedText)
             }
             return
@@ -37,11 +54,22 @@ object EntityTranslationManager {
 
         TranslationService.translateAsync(plainText) { result ->
             if (result != null && !result.isSameLanguage) {
+                failedEntities.remove(textKey)
                 textComponentCache[textKey] = createFormattedName(result.translatedText)
             } else if (result == null && TranslationService.isFailed(plainText, targetLang)) {
+                failedEntities.add(textKey)
                 textComponentCache[textKey] = createFailedName(plainText)
             }
         }
+    }
+
+    private fun getValidCachedEntity(textKey: String, plainText: String, targetLang: String): Component? {
+        val cached = textComponentCache[textKey] ?: return null
+        if (!failedEntities.contains(textKey)) return cached
+        if (TranslationService.isFailed(plainText, targetLang)) return cached
+        failedEntities.remove(textKey)
+        textComponentCache.remove(textKey)
+        return null
     }
 
     @Suppress("UnusedParameter", "ReturnCount")
@@ -51,19 +79,21 @@ object EntityTranslationManager {
         val targetLang = TranslationService.getTargetLanguage()
         val textKey = "$targetLang::$plainText"
 
-        val cached = textComponentCache[textKey]
+        val cached = getValidCachedEntity(textKey, plainText, targetLang)
         if (cached != null) return cached
 
         val cachedResult = TranslationService.getCached(plainText, targetLang)
         if (cachedResult != null) {
             if (cachedResult.isSameLanguage) return original
             val comp = createFormattedName(cachedResult.translatedText)
+            failedEntities.remove(textKey)
             textComponentCache[textKey] = comp
             return comp
         }
 
         if (TranslationService.isFailed(plainText, targetLang)) {
             val failedComp = createFailedName(plainText)
+            failedEntities.add(textKey)
             textComponentCache[textKey] = failedComp
             return failedComp
         }
@@ -74,6 +104,7 @@ object EntityTranslationManager {
 
     fun clearCache() {
         textComponentCache.clear()
+        failedEntities.clear()
     }
 
     private fun getTranslatableText(original: Component): String? {

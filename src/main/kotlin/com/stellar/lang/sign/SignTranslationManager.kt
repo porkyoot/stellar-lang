@@ -1,6 +1,7 @@
 package com.stellar.lang.sign
 
 import com.stellar.lang.input.StellarLangInputHandler
+import com.stellar.lang.service.TranslationResult
 import com.stellar.lang.service.TranslationService
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.world.level.block.entity.SignBlockEntity
@@ -19,6 +20,23 @@ object SignTranslationManager {
     internal val textOutcomeCache = ConcurrentHashMap<String, SignFormatHelper.SignTranslationOutcome>()
     internal val signCache = ConcurrentHashMap<String, SignText>()
     internal val failedSignKeys = ConcurrentHashMap.newKeySet<String>()
+
+    init {
+        TranslationService.addSuccessListener { result ->
+            onTranslationSuccess(result)
+        }
+    }
+
+    internal fun onTranslationSuccess(result: TranslationResult) {
+        if (result.isSameLanguage) return
+        val targetLang = result.targetLanguage
+        val textKey = buildTextKey(targetLang, result.originalText)
+        failedSignKeys.remove(textKey)
+        if (!textOutcomeCache.containsKey(textKey)) {
+            val dummySignText = SignText()
+            textOutcomeCache[textKey] = applyTranslatedLinesWithOutcome(dummySignText, result.translatedText)
+        }
+    }
 
     private fun buildTextKey(targetLang: String, sentence: String): String = "$targetLang$KEY_DELIMITER$sentence"
 
@@ -67,7 +85,11 @@ object SignTranslationManager {
         val targetLang = TranslationService.getTargetLanguage()
         val textKey = buildTextKey(targetLang, sentence)
         if (textOutcomeCache.containsKey(textKey)) return false
-        return failedSignKeys.contains(textKey) || TranslationService.isFailed(sentence, targetLang)
+        val serviceFailed = TranslationService.isFailed(sentence, targetLang)
+        if (!serviceFailed) {
+            failedSignKeys.remove(textKey)
+        }
+        return failedSignKeys.contains(textKey) || serviceFailed
     }
 
     fun isFailed(sign: SignBlockEntity, isFront: Boolean): Boolean {
@@ -127,7 +149,13 @@ object SignTranslationManager {
         val text = if (isFront) sign.frontText else sign.backText
         val translated = getTranslatedSignText(text)
         if (translated == null) {
-            translateSignText(text)
+            val sentence = extractSentence(text)
+            val targetLang = TranslationService.getTargetLanguage()
+            val textKey = buildTextKey(targetLang, sentence)
+            if (!TranslationService.isFailed(sentence, targetLang)) {
+                failedSignKeys.remove(textKey)
+                translateSignText(text)
+            }
         }
         return translated
     }
