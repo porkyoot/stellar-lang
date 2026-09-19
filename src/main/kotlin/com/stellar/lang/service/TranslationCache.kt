@@ -85,6 +85,9 @@ object TranslationCache {
     }
 
     fun put(result: TranslationResult) {
+        if (!result.isSameLanguage && result.originalText.equals(result.translatedText, ignoreCase = true)) {
+            return
+        }
         ensureInitialized()
         val key = cacheKey(result.originalText, result.targetLanguage)
         synchronized(cacheLock) {
@@ -226,8 +229,11 @@ object TranslationCache {
                 val type = object : TypeToken<List<TranslationResult>>() {}.type
                 val list: List<TranslationResult>? = gson.fromJson(json, type)
                 list?.forEach { res ->
-                    val key = cacheKey(res.originalText, res.targetLanguage)
-                    lruCache[key] = res
+                    val isBogus = !res.isSameLanguage && res.originalText.equals(res.translatedText, ignoreCase = true)
+                    if (!isBogus) {
+                        val key = cacheKey(res.originalText, res.targetLanguage)
+                        lruCache[key] = res
+                    }
                 }
                 isDirty = false
             }.onFailure { ex ->

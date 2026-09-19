@@ -79,7 +79,7 @@ abstract class AbstractSignEditScreenMixin : Screen(Component.empty()) {
             Component.literal("Original").withStyle(ChatFormatting.GRAY),
             origX.toInt(),
             (origY - 50).toInt(),
-            0xAAAAAA,
+            0xFFAAAAAA.toInt(),
         )
 
         val langCode = TranslationService.getTargetLanguage().uppercase()
@@ -89,7 +89,13 @@ abstract class AbstractSignEditScreenMixin : Screen(Component.empty()) {
         )
         val header = Component.empty().append(badge)
             .append(Component.literal("Translated ($langCode)").withStyle(ChatFormatting.WHITE))
-        extractor.centeredText(this.font, header, secondSignX.toInt(), (secondSignY - 50).toInt(), 0xFFFFFF)
+        extractor.centeredText(
+            this.font,
+            header,
+            secondSignX.toInt(),
+            (secondSignY - 50).toInt(),
+            0xFFFFFFFF.toInt(),
+        )
 
         // Draw the second bigger sign
         renderSecondBiggerSign(extractor, secondSignX, secondSignY)
@@ -102,44 +108,54 @@ abstract class AbstractSignEditScreenMixin : Screen(Component.empty()) {
         extractor.pose().translate(secondSignX, secondSignY)
         extractor.pose().scale(previewScale, previewScale)
 
-        // Draw sign background
         extractor.pose().pushMatrix()
         this.extractSignBackground(extractor)
         extractor.pose().popMatrix()
 
-        // Draw translated text
         val textScale = this.getSignTextScale()
         extractor.pose().scale(textScale.x(), textScale.y())
 
         val fullOriginal = messages.map { it.trim() }.filter { it.isNotEmpty() }.joinToString(" ")
         val translated = SignEditPreviewManager.updateRealtimeTranslation(fullOriginal)
+        renderPreviewContent(extractor, fullOriginal, translated)
 
+        extractor.pose().popMatrix()
+    }
+
+    private fun renderPreviewContent(extractor: GuiGraphicsExtractor, fullOriginal: String, translated: String) {
         val darkColor = if (this.text.hasGlowingText()) {
             this.text.color.textColor
         } else {
             AbstractSignRenderer.getDarkColor(this.text)
         }
         val textColor = if (darkColor == 0) 0x000000 else darkColor
+        val displayText = when {
+            translated.isNotEmpty() -> translated
+            SignEditPreviewManager.hasFailed.get() -> fullOriginal
+            else -> ""
+        }
 
-        if (translated.isNotEmpty()) {
-            val lines = SignTooltipRenderer.wrapTooltipLines(translated, SignEditPreviewManager.PREVIEW_LINE_CHARS)
-            val lineHeight = this.sign.textLineHeight
-            val totalHeight = lines.size * lineHeight
-            val startY = -totalHeight / 2
-            for (i in lines.indices) {
-                val lineStr = lines[i]
-                val lineWidth = this.font.width(lineStr)
-                val posX = -lineWidth / 2
-                val posY = startY + i * lineHeight
-                extractor.text(this.font, lineStr, posX, posY, textColor, false)
-            }
+        if (displayText.isNotEmpty()) {
+            renderPreviewLines(extractor, displayText, textColor)
         } else if (fullOriginal.isNotEmpty() && SignEditPreviewManager.isTranslating.get()) {
             val translatingMsg = "..."
             val msgWidth = this.font.width(translatingMsg)
             extractor.text(this.font, translatingMsg, -msgWidth / 2, 0, 0x888888, false)
         }
+    }
 
-        extractor.pose().popMatrix()
+    private fun renderPreviewLines(extractor: GuiGraphicsExtractor, text: String, textColor: Int) {
+        val lines = SignTooltipRenderer.wrapTooltipLines(text, SignEditPreviewManager.PREVIEW_LINE_CHARS)
+        val lineHeight = this.sign.textLineHeight
+        val totalHeight = lines.size * lineHeight
+        val startY = -totalHeight / 2
+        for (i in lines.indices) {
+            val lineStr = lines[i]
+            val lineWidth = this.font.width(lineStr)
+            val posX = -lineWidth / 2
+            val posY = startY + i * lineHeight
+            extractor.text(this.font, lineStr, posX, posY, textColor, false)
+        }
     }
 
     @Inject(method = ["removed"], at = [At("TAIL")])

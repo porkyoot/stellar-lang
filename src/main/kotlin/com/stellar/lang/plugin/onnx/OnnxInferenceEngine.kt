@@ -45,6 +45,12 @@ object OnnxInferenceEngine : AutoCloseable {
     @Volatile
     private var loadedDetectionModelPath: String? = null
 
+    @Volatile
+    private var detectionVocab: Map<String, Int>? = null
+
+    @Volatile
+    private var loadedVocabPath: String? = null
+
     private val translationSessions = ConcurrentHashMap<String, OrtSession>()
 
     private val loadedTranslationModelPaths = ConcurrentHashMap<String, String>()
@@ -253,21 +259,49 @@ object OnnxInferenceEngine : AutoCloseable {
             }
             val results = session.run(inputs)
             val outputTensor = results.get(0) as? OnnxTensor
+            val outputType = outputTensor?.info?.type
 
             inputTensor.close()
             maskTensor.close()
             results.close()
 
-            outputTensor?.let {
-                // If model produces translated tokens/strings
-                text
-            } ?: text
+            // If output is not token IDs (e.g. last_hidden_state float embeddings from encoder),
+            // it is only an encoder and cannot generate translated text without an autoregressive decoder.
+            if (outputType == ai.onnxruntime.OnnxJavaType.INT64) {
+                null
+            } else {
+                null
+            }
         }.onFailure { ex ->
             logger.warn("ONNX translation failed for target '{}': {}", targetLang, ex.message)
         }.getOrNull()
     }
 
+    internal fun getOrLoadDetectionVocab(): Map<String, Int>? {
+        val vocabFile = OnnxModelManager.getDetectionVocabFile()
+        if (!vocabFile.exists() || vocabFile.length() == 0L) {
+            detectionVocab = null
+            loadedVocabPath = null
+            return null
+        }
+        val cached = detectionVocab
+        if (cached != null && loadedVocabPath == vocabFile.absolutePath) {
+            return cached
+        }
+        return OnnxWordPieceTokenizer.loadVocab(vocabFile)?.also {
+            detectionVocab = it
+            loadedVocabPath = vocabFile.absolutePath
+        }
+    }
+
+    internal fun wordPieceTokenize(text: String, maxLen: Int, vocab: Map<String, Int>): LongArray =
+        OnnxWordPieceTokenizer.tokenize(text, maxLen, vocab)
+
     internal fun simpleTokenize(text: String, maxLen: Int): LongArray {
+        val vocab = getOrLoadDetectionVocab()
+        if (vocab != null) {
+            return wordPieceTokenize(text, maxLen, vocab)
+        }
         // Deterministic character/byte tokenization compatible with multilingual BERT input
         val tokens = mutableListOf<Long>()
         tokens.add(101L) // [CLS]
@@ -282,6 +316,8 @@ object OnnxInferenceEngine : AutoCloseable {
         runCatching { detectionSession?.close() }
         detectionSession = null
         loadedDetectionModelPath = null
+        detectionVocab = null
+        loadedVocabPath = null
         translationSessions.values.forEach { runCatching { it.close() } }
         translationSessions.clear()
         loadedTranslationModelPaths.clear()

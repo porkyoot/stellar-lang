@@ -47,10 +47,10 @@ class OnnxPluginSpec : FunSpec({
 
         val translator = OnnxTranslationPlugin()
         val translated = translator.translate("Hello world", "en", "es")
-        translated shouldBe "Hello world"
+        translated shouldBe null
         // Second call exercises session caching hit
         val cachedTrans = translator.translate("Hello world 2", "en", "es")
-        cachedTrans shouldBe "Hello world 2"
+        cachedTrans shouldBe null
 
         val batch = translator.translateBatch(listOf("Hello", "World"), "en", "es")
         batch shouldBe listOf("Hello", "World")
@@ -68,10 +68,71 @@ class OnnxPluginSpec : FunSpec({
         OnnxInferenceEngine.resetSessions()
 
         val translator = OnnxTranslationPlugin()
-        translator.translate("Hello world", "en", "es") shouldBe "Hello world"
+        translator.translate("Hello world", "en", "es") shouldBe null
 
         tempDir.deleteRecursively()
         OnnxInferenceEngine.resetSessions()
+    }
+
+    test("WordPiece tokenization normalizes accents and splits words") {
+        val mockVocab = mapOf(
+            "[UNK]" to 0,
+            "[CLS]" to 1,
+            "[SEP]" to 2,
+            "ta" to 10,
+            "mere" to 11,
+            "est" to 12,
+            "pas" to 13,
+            "pret" to 14,
+            "##e" to 15,
+        )
+        val tokens = OnnxInferenceEngine.wordPieceTokenize("Ta mère est pas prête", 32, mockVocab)
+        tokens shouldBe longArrayOf(1L, 10L, 11L, 12L, 13L, 14L, 15L, 2L)
+
+        val unkTokens = OnnxInferenceEngine.wordPieceTokenize("xyz", 32, mockVocab)
+        unkTokens shouldBe longArrayOf(1L, 0L, 2L)
+
+        val shortTokens = OnnxInferenceEngine.wordPieceTokenize("hello world 2", 3, mockVocab)
+        shortTokens.size shouldBe 3
+
+        OnnxWordPieceTokenizer.loadVocab(java.io.File("build/non_existent_vocab.json")) shouldBe null
+
+        val badJsonFile = java.io.File("build/bad_vocab.json").apply { writeText("not json") }
+        OnnxWordPieceTokenizer.loadVocab(badJsonFile) shouldBe null
+        badJsonFile.delete()
+
+        val emptyObjFile = java.io.File("build/empty_vocab.json").apply { writeText("{}") }
+        OnnxWordPieceTokenizer.loadVocab(emptyObjFile) shouldBe null
+        emptyObjFile.delete()
+
+        val punctuationParts = OnnxWordPieceTokenizer.splitWordsAndPunctuation("hello, world! 123")
+        punctuationParts shouldBe listOf("hello", ",", "world", "!", "123")
+    }
+
+    test("OnnxLanguageDetectorPlugin detects French accurately with real tokenizer") {
+        val candidates = listOf(
+            java.io.File("run/client/config/stellar_lang/models"),
+            java.io.File("../run/client/config/stellar_lang/models"),
+        )
+        val realModelsDir = candidates.firstOrNull {
+            java.io.File(it, "detection/model.onnx").exists() && java.io.File(it, "detection/tokenizer.json").exists()
+        }
+        if (realModelsDir != null) {
+            val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")!!
+            config.onnxModelDir.setValue(realModelsDir.path, false)
+            OnnxInferenceEngine.resetSessions()
+
+            val detector = OnnxLanguageDetectorPlugin()
+            val detected = detector.detectLanguage("Ta mère est pas prête")
+            detected shouldBe "fr"
+
+            val detectedEn = detector.detectLanguage("Your mother is not ready")
+            detectedEn shouldBe "en"
+
+            val detectedEs = detector.detectLanguage("Buenos días amigo")
+            detectedEs shouldBe "es"
+            OnnxInferenceEngine.resetSessions()
+        }
     }
 
     test("OnnxTranslationPlugin metadata and status") {
