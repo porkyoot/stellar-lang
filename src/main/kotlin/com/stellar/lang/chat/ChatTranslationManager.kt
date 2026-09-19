@@ -131,7 +131,7 @@ object ChatTranslationManager {
             return component
         }
 
-        return resolveAndTranslate(component, payload, config.targetLanguage.value())
+        return resolveAndTranslate(component, payload, TranslationService.getTargetLanguage())
     }
 
     private fun resolveAndTranslate(

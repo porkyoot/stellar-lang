@@ -14,7 +14,7 @@ class StellarLangConfigSpec : FunSpec({
         config.enabled.value() shouldBe true
         config.apiHost.value() shouldBe "https://libretranslate.com"
         config.apiKey.value() shouldBe ""
-        config.targetLanguage.value() shouldBe "en"
+        config.targetLanguage.value() shouldBe "auto"
         config.translateChat.value() shouldBe true
         config.translateSigns.value() shouldBe true
         config.translateBooks.value() shouldBe true

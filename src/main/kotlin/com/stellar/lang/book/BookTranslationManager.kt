@@ -22,7 +22,7 @@ object BookTranslationManager {
         }
 
         val config = TranslationService.getConfig()
-        val targetLang = config.targetLanguage.value()
+        val targetLang = TranslationService.getTargetLanguage()
         val cacheKey = "$targetLang::${pageTexts.joinToString("||") { it.hashCode().toString() }}"
         val cached = translatedBooks[cacheKey]
         if (cached != null) {

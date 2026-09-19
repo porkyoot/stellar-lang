@@ -24,7 +24,7 @@ object ItemTranslationManager {
         if (stack == null || stack.customName == null) return original
         val plainText = getTranslatableText(original) ?: return original
         val config = TranslationService.getConfig()
-        val targetLang = config.targetLanguage.value()
+        val targetLang = TranslationService.getTargetLanguage()
         val cacheKey = "$targetLang::${plainText.hashCode()}"
 
         val cached = itemCache[cacheKey]

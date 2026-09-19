@@ -12,6 +12,7 @@ import net.minecraft.network.chat.Component
 /**
  * Factory for creating the Cloth Config GUI screen bound to StellarLangConfig.
  */
+@Suppress("LargeClass")
 object LangClothConfigScreen {
     private val testToastId by lazy {
         runCatching { net.minecraft.client.gui.components.toasts.SystemToast.SystemToastId() }.getOrNull()
@@ -52,10 +53,15 @@ object LangClothConfigScreen {
             .setSaveConsumer { value -> config.enabled.setValue(value, true) }
             .build()
 
+        val inferred = TranslationService.inferTargetLanguage().uppercase()
         val targetLang = entries
             .startStrField(Component.literal("Target Language"), config.targetLanguage.value())
-            .setDefaultValue("en")
-            .setTooltip(Component.literal("Language code to translate into (e.g. en, es, fr, de, ja, zh)"))
+            .setDefaultValue("auto")
+            .setTooltip(
+                Component.literal(
+                    "Language code to translate into (e.g. auto, en, es, fr). 'auto' infers from game ($inferred).",
+                ),
+            )
             .setSaveConsumer { value -> config.targetLanguage.setValue(value.trim().lowercase(), true) }
             .build()
 
@@ -175,7 +181,7 @@ object LangClothConfigScreen {
         TranslationService.testConnection(
             host = host.ifBlank { config.apiHost.value() },
             apiKey = apiKey,
-            targetLang = config.targetLanguage.value(),
+            targetLang = TranslationService.getTargetLanguage(),
         ) { result ->
             result.fold(
                 onSuccess = { translated ->

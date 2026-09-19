@@ -38,7 +38,7 @@ object SignTranslationManager {
         val sentence = extractSentence(signText)
         if (sentence.isBlank()) return
 
-        val targetLang = config.targetLanguage.value()
+        val targetLang = TranslationService.getTargetLanguage()
         val textKey = buildTextKey(targetLang, sentence)
 
         val cached = TranslationService.getCached(sentence, targetLang)
@@ -65,7 +65,7 @@ object SignTranslationManager {
         val sentence = extractSentence(signText)
         if (sentence.isBlank()) return null
 
-        val targetLang = config.targetLanguage.value()
+        val targetLang = TranslationService.getTargetLanguage()
         val textKey = buildTextKey(targetLang, sentence)
 
         val outcome = textOutcomeCache[textKey]

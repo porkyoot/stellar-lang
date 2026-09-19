@@ -18,8 +18,8 @@ class StellarLangConfig : ReflectiveConfig() {
     @Comment("API key for LibreTranslate (optional for public/local instances without auth)")
     val apiKey: TrackedValue<String> = value("")
 
-    @Comment("Target language code (e.g. en, es, fr, de, ja, zh)")
-    val targetLanguage: TrackedValue<String> = value("en")
+    @Comment("Target language code (e.g. auto, en, es, fr, de, ja, zh). 'auto' infers from game setting.")
+    val targetLanguage: TrackedValue<String> = value("auto")
 
     @Comment("Enable translation of in-game chat messages")
     val translateChat: TrackedValue<Boolean> = value(true)

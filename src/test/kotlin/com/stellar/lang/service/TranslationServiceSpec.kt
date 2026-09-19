@@ -514,4 +514,66 @@ class TranslationServiceSpec : FunSpec({
         latch.await(5, TimeUnit.SECONDS) shouldBe true
         outcome?.isFailure shouldBe true
     }
+
+    test("normalizeLanguageCode maps various Minecraft language codes properly") {
+        TranslationService.normalizeLanguageCode("en_us") shouldBe "en"
+        TranslationService.normalizeLanguageCode("en_gb") shouldBe "en"
+        TranslationService.normalizeLanguageCode("fr_fr") shouldBe "fr"
+        TranslationService.normalizeLanguageCode("fr_ca") shouldBe "fr"
+        TranslationService.normalizeLanguageCode("de_de") shouldBe "de"
+        TranslationService.normalizeLanguageCode("es_es") shouldBe "es"
+        TranslationService.normalizeLanguageCode("es_mx") shouldBe "es"
+        TranslationService.normalizeLanguageCode("zh_cn") shouldBe "zh"
+        TranslationService.normalizeLanguageCode("zh_tw") shouldBe "zh"
+        TranslationService.normalizeLanguageCode("ja_jp") shouldBe "ja"
+        TranslationService.normalizeLanguageCode("ko_kr") shouldBe "ko"
+        TranslationService.normalizeLanguageCode("ru_ru") shouldBe "ru"
+        TranslationService.normalizeLanguageCode("pt_br") shouldBe "pt"
+        TranslationService.normalizeLanguageCode("pt_pt") shouldBe "pt"
+        TranslationService.normalizeLanguageCode("lol_us") shouldBe "en"
+        TranslationService.normalizeLanguageCode("en-US") shouldBe "en"
+        TranslationService.normalizeLanguageCode("DE") shouldBe "de"
+    }
+
+    test("normalizeLanguageCode fallbacks on null or blank or invalid codes") {
+        val defaultLang = TranslationService.normalizeLanguageCode(null)
+        (defaultLang.length in 2..3) shouldBe true
+
+        val blankLang = TranslationService.normalizeLanguageCode("   ")
+        (blankLang.length in 2..3) shouldBe true
+
+        TranslationService.normalizeLanguageCode("toolongcode") shouldBe "en"
+        TranslationService.normalizeLanguageCode("x") shouldBe "en"
+    }
+
+    test("getTargetLanguage infers from languageProvider when targetLanguage is auto or empty") {
+        val config = TranslationService.getConfig()
+        config.targetLanguage.setValue("auto", false)
+
+        TranslationService.languageProvider = { "fr_fr" }
+        TranslationService.getTargetLanguage() shouldBe "fr"
+
+        TranslationService.languageProvider = { "de_de" }
+        TranslationService.getTargetLanguage() shouldBe "de"
+
+        TranslationService.languageProvider = { "es_es" }
+        TranslationService.getTargetLanguage() shouldBe "es"
+
+        config.targetLanguage.setValue("", false)
+        TranslationService.languageProvider = { "ja_jp" }
+        TranslationService.getTargetLanguage() shouldBe "ja"
+
+        // Explicit override ignores game language
+        config.targetLanguage.setValue("ru", false)
+        TranslationService.getTargetLanguage() shouldBe "ru"
+
+        // Cleanup
+        TranslationService.languageProvider = null
+    }
+
+    test("inferTargetLanguage falls back when Minecraft is not running in headless test") {
+        TranslationService.languageProvider = null
+        val inferred = TranslationService.inferTargetLanguage()
+        (inferred.length in 2..3) shouldBe true
+    }
 })

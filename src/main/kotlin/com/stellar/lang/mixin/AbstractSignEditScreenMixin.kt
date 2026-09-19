@@ -82,7 +82,7 @@ abstract class AbstractSignEditScreenMixin : Screen(Component.empty()) {
             0xAAAAAA,
         )
 
-        val langCode = config.targetLanguage.value().uppercase()
+        val langCode = TranslationService.getTargetLanguage().uppercase()
         val header = Component.literal("[T] ")
             .withStyle(ChatFormatting.AQUA, ChatFormatting.BOLD)
             .append(Component.literal("Translated ($langCode)").withStyle(ChatFormatting.WHITE))

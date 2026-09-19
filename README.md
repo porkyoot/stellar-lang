@@ -34,8 +34,10 @@ Powered by **LibreTranslate**, Stellar Lang leverages contextual translation: ne
 * **Smart Detection:** Automatically avoids translating text that is already in your target language.
 
 ### 📖 Multi-Page Book Translation
-* **Context Preservation:** Unifies book pages into a coherent document before translation to maintain sentence structure and grammar across page boundaries.
-* **Floating `[T]` Button:** Interactive toggle button in the book reading screen (`BookViewScreen`) to quickly alternate between original and translated text.
+* **Side-by-Side Dual Book View:** When opening a book whose detected language is not the player's target language, a non-editable, wider and bigger translated book is displayed alongside the original book with "Original" and "[T] Translated (<LANG>)" headers.
+* **Overflow & Mouse Wheel Scrolling:** Supports wider text wrapping, renders beyond vanilla's 14-line limit, and allows scrolling with the mouse wheel so overflowing translated text is never truncated.
+* **Synchronized Pagination:** Turning pages via buttons or arrow keys flips both books simultaneously.
+* **Centered Vanilla Fallback:** When a book is already in the target language (or empty), the standard centered vanilla book view is preserved with no extra UI.
 
 ### 🪧 Area Sign Translation
 * **Spatial Sign Clustering:** Scans neighboring signs within a 5-block radius to translate multi-sign boards together as a unified message.

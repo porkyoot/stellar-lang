@@ -25,7 +25,7 @@ object EntityTranslationManager {
     fun onEntityNameChanged(name: Component) {
         val plainText = getTranslatableText(name) ?: return
         val config = TranslationService.getConfig()
-        val targetLang = config.targetLanguage.value()
+        val targetLang = TranslationService.getTargetLanguage()
         val textKey = "$targetLang::$plainText"
 
         val cachedResult = TranslationService.getCached(plainText, targetLang)
@@ -47,7 +47,7 @@ object EntityTranslationManager {
     fun translateEntityName(entity: Entity? = null, original: Component): Component {
         val plainText = getTranslatableText(original) ?: return original
         val config = TranslationService.getConfig()
-        val targetLang = config.targetLanguage.value()
+        val targetLang = TranslationService.getTargetLanguage()
         val textKey = "$targetLang::$plainText"
 
         val cached = textComponentCache[textKey]

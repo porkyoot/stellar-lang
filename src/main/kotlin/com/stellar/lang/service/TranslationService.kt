@@ -46,6 +46,47 @@ object TranslationService {
         Thread(runnable, "StellarLang-Worker").apply { isDaemon = true }
     }
 
+    private const val MIN_LANG_CODE_LENGTH = 2
+    private const val MAX_LANG_CODE_LENGTH = 3
+    private const val DEFAULT_FALLBACK_LANG = "en"
+    private const val AUTO_LANG = "auto"
+
+    internal var languageProvider: (() -> String?)? = null
+
+    fun getTargetLanguage(): String {
+        val configured = getConfig().targetLanguage.value().trim().lowercase()
+        if (configured.isNotEmpty() && configured != AUTO_LANG) {
+            return configured
+        }
+        return inferTargetLanguage()
+    }
+
+    fun inferTargetLanguage(): String {
+        val gameCode = languageProvider?.invoke() ?: getGameLanguageCode()
+        return normalizeLanguageCode(gameCode)
+    }
+
+    fun normalizeLanguageCode(code: String?): String {
+        if (code.isNullOrBlank()) {
+            val sysLang = runCatching { java.util.Locale.getDefault().language }.getOrNull()
+            return if (!sysLang.isNullOrBlank() && sysLang.length in MIN_LANG_CODE_LENGTH..MAX_LANG_CODE_LENGTH) {
+                sysLang.lowercase()
+            } else {
+                DEFAULT_FALLBACK_LANG
+            }
+        }
+        val clean = code.trim().lowercase().replace('-', '_')
+        if (clean == "lol_us") return DEFAULT_FALLBACK_LANG
+        val primary = clean.substringBefore('_')
+        return if (primary.length in MIN_LANG_CODE_LENGTH..MAX_LANG_CODE_LENGTH) primary else DEFAULT_FALLBACK_LANG
+    }
+
+    private fun getGameLanguageCode(): String? {
+        return runCatching {
+            net.minecraft.client.Minecraft.getInstance().options.languageCode
+        }.getOrNull()
+    }
+
     fun getConfig(): StellarLangConfig {
         return ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")
             ?: ConfigManager.register(StellarLangMod.MOD_ID, "main", StellarLangConfig::class.java)
@@ -68,7 +109,7 @@ object TranslationService {
             return
         }
 
-        val targetLang = config.targetLanguage.value()
+        val targetLang = getTargetLanguage()
         val cached = TranslationCache.get(trimmed, targetLang)
         if (cached != null) {
             callback(cached)
@@ -94,7 +135,7 @@ object TranslationService {
         key: String,
         config: StellarLangConfig,
     ) {
-        val targetLang = config.targetLanguage.value()
+        val targetLang = getTargetLanguage()
         executor.execute {
             val result = executeTranslation(trimmed, config.apiHost.value(), config.apiKey.value(), targetLang)
             if (result != null) {
@@ -113,7 +154,7 @@ object TranslationService {
         val config = getConfig()
         if (!config.enabled.value()) return null
 
-        val targetLang = config.targetLanguage.value()
+        val targetLang = getTargetLanguage()
         return resolveBatchTranslations(nonBlank, config, targetLang)
     }
 
@@ -338,7 +379,7 @@ object TranslationService {
     fun testConnection(
         host: String,
         apiKey: String,
-        targetLang: String = "en",
+        targetLang: String = getTargetLanguage(),
         callback: (Result<String>) -> Unit,
     ) {
         executor.execute {

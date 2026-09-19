@@ -35,8 +35,7 @@ object SignEditPreviewManager {
             return ""
         }
 
-        val config = TranslationService.getConfig()
-        val targetLang = config.targetLanguage.value()
+        val targetLang = TranslationService.getTargetLanguage()
 
         val cached = TranslationService.getCached(trimmed, targetLang)
         if (cached != null) {
