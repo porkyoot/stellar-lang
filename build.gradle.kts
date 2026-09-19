@@ -23,7 +23,7 @@ tasks.named<JacocoReport>("jacocoTestReport") {
     classDirectories.setFrom(
         classDirectories.files.map {
             fileTree(it) {
-                exclude("**/mixin/**", "**/LangClothConfigScreen*", "**/StellarLangModMenu*", "**/SignTooltipRenderer*")
+                exclude("**/mixin/**", "**/LangClothConfigScreen*", "**/StellarLangModMenu*", "**/SignTooltipRenderer*", "**/TranslatedBookWidget*")
             }
         }
     )
@@ -34,7 +34,7 @@ tasks.named<JacocoCoverageVerification>("jacocoTestCoverageVerification") {
     classDirectories.setFrom(
         classDirectories.files.map {
             fileTree(it) {
-                exclude("**/mixin/**", "**/LangClothConfigScreen*", "**/StellarLangModMenu*", "**/SignTooltipRenderer*")
+                exclude("**/mixin/**", "**/LangClothConfigScreen*", "**/StellarLangModMenu*", "**/SignTooltipRenderer*", "**/TranslatedBookWidget*")
             }
         }
     )

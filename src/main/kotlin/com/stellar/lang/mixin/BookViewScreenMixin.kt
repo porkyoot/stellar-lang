@@ -1,6 +1,7 @@
 package com.stellar.lang.mixin
 
 import com.stellar.lang.book.BookTranslationManager
+import com.stellar.lang.book.TranslatedBookWidget
 import com.stellar.lang.service.TranslationService
 import net.minecraft.ChatFormatting
 import net.minecraft.client.gui.GuiGraphicsExtractor
@@ -24,8 +25,8 @@ private const val PREVIEW_SCALE_Y = 1.16f
 private const val MIN_HEADER_Y = 4
 private const val HEADER_OFFSET_Y = 12
 private const val MIN_SCREEN_HEIGHT_FOR_HEADER = 240
-private const val HEADER_GRAY_COLOR = 0xAAAAAA
-private const val HEADER_WHITE_COLOR = 0xFFFFFF
+private val HEADER_GRAY_COLOR = 0xFFAAAAAA.toInt()
+private val HEADER_WHITE_COLOR = 0xFFFFFFFF.toInt()
 private const val BOTTOM_BUTTON_MARGIN = 24
 private const val BUTTON_PADDING_Y = 6
 private const val BUTTON_PAGE_FORWARD_X = 116

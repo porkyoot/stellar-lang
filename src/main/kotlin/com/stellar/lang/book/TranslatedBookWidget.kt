@@ -1,4 +1,4 @@
-package com.stellar.lang.mixin
+package com.stellar.lang.book
 
 import net.minecraft.ChatFormatting
 import net.minecraft.client.gui.Font
