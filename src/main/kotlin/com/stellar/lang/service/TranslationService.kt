@@ -190,7 +190,8 @@ object TranslationService {
                 null
             }
         }.getOrElse { ex ->
-            logger.warn("LibreTranslate request failed for '{}': {}", text, ex.message)
+            val errorDetail = ex.message ?: ex::class.simpleName ?: ex.toString()
+            logger.warn("LibreTranslate request failed for '{}': {}", text, errorDetail)
             null
         }
     }
@@ -222,11 +223,17 @@ object TranslationService {
                 }
                 null
             }
+        }.onFailure { ex ->
+            val errorDetail = ex.message ?: ex::class.simpleName ?: ex.toString()
+            logger.warn("LibreTranslate batch request failed for {} items: {}", texts.size, errorDetail)
         }.getOrNull()
     }
 
     private fun normalizeEndpoint(host: String): String {
-        val trimmed = host.trim().trimEnd('/')
+        var trimmed = host.trim().trimEnd('/')
+        if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
+            trimmed = "http://$trimmed"
+        }
         return if (trimmed.endsWith("/translate")) trimmed else "$trimmed/translate"
     }
 
@@ -278,35 +285,46 @@ object TranslationService {
         targetLang: String,
     ): List<TranslationResult>? {
         return runCatching {
-            val json = JsonParser.parseString(body)
-            if (json.isJsonObject) {
-                val obj = json.asJsonObject
-                val translatedElem = obj.get("translatedText")
-                val detected = parseDetectedLanguage(obj)
-                val isSame = detected.equals(targetLang, ignoreCase = true)
-                if (translatedElem != null && translatedElem.isJsonArray) {
-                    val array = translatedElem.asJsonArray
-                    return originalTexts.mapIndexed { index, orig ->
-                        val trans = array.get(index)?.asString ?: orig
-                        val result = TranslationResult(orig, trans, detected, targetLang, isSame)
-                        TranslationCache.put(result)
-                        result
-                    }
+            val json = JsonParser.parseString(body).asJsonObject
+            val translatedArray = json.get("translatedText")?.takeIf { it.isJsonArray }?.asJsonArray ?: return null
+            val detectedArray = json.get("detectedLanguage")?.takeIf { it.isJsonArray }?.asJsonArray
+            val defaultDetected = parseDetectedLanguage(json)
+
+            originalTexts.mapIndexed { index, orig ->
+                val trans = translatedArray.get(index)?.asString ?: orig
+                val detected = if (detectedArray != null && index < detectedArray.size()) {
+                    extractLanguageFromElement(detectedArray.get(index))
+                } else {
+                    defaultDetected
                 }
+                val isSame = detected.equals(targetLang, ignoreCase = true)
+                val result = TranslationResult(orig, trans, detected, targetLang, isSame)
+                TranslationCache.put(result)
+                result
             }
-            null
         }.getOrNull()
+    }
+
+    private fun extractLanguageFromElement(element: JsonElement?): String {
+        if (element == null || element.isJsonNull) return UNKNOWN_LANG
+        if (element.isJsonObject) {
+            return element.asJsonObject.get("language")?.asString ?: UNKNOWN_LANG
+        }
+        if (element.isJsonPrimitive && element.asJsonPrimitive.isString) {
+            return element.asString
+        }
+        return UNKNOWN_LANG
     }
 
     private fun parseDetectedLanguage(obj: JsonObject): String {
         val element: JsonElement = obj.get("detectedLanguage") ?: return UNKNOWN_LANG
-        if (element.isJsonObject) {
-            return element.asJsonObject.get("language")?.asString ?: UNKNOWN_LANG
+        if (element.isJsonArray) {
+            val array = element.asJsonArray
+            if (!array.isEmpty) {
+                return extractLanguageFromElement(array.get(0))
+            }
         }
-        if (element.isJsonPrimitive) {
-            return element.asString
-        }
-        return UNKNOWN_LANG
+        return extractLanguageFromElement(element)
     }
 
     fun isThrottled(key: String): Boolean = TranslationCache.isThrottled(key)

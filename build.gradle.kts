@@ -14,7 +14,7 @@ tasks.named<JacocoReport>("jacocoTestReport") {
     classDirectories.setFrom(
         classDirectories.files.map {
             fileTree(it) {
-                exclude("**/mixin/**", "**/LangClothConfigScreen*", "**/StellarLangModMenu*")
+                exclude("**/mixin/**", "**/LangClothConfigScreen*", "**/StellarLangModMenu*", "**/SignTooltipRenderer*")
             }
         }
     )
@@ -25,7 +25,7 @@ tasks.named<JacocoCoverageVerification>("jacocoTestCoverageVerification") {
     classDirectories.setFrom(
         classDirectories.files.map {
             fileTree(it) {
-                exclude("**/mixin/**", "**/LangClothConfigScreen*", "**/StellarLangModMenu*")
+                exclude("**/mixin/**", "**/LangClothConfigScreen*", "**/StellarLangModMenu*", "**/SignTooltipRenderer*")
             }
         }
     )

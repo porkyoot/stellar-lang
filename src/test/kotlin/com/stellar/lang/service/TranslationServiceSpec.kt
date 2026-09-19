@@ -249,6 +249,26 @@ class TranslationServiceSpec : FunSpec({
         results shouldBe null
     }
 
+    test("translateBatchSync handles connection exception gracefully") {
+        val config = TranslationService.getConfig()
+        config.apiHost.setValue("http://127.0.0.1:1", false)
+        val results = TranslationService.translateBatchSync(listOf("Test"))
+        results shouldBe null
+    }
+
+    test("translateSync handles connection exception gracefully") {
+        val config = TranslationService.getConfig()
+        config.apiHost.setValue("http://127.0.0.1:1", false)
+        val latch = CountDownLatch(1)
+        var result: TranslationResult? = TranslationResult("dummy", "dummy", "en", "es", false)
+        TranslationService.translateAsync("Test") { res ->
+            result = res
+            latch.countDown()
+        }
+        latch.await(3, TimeUnit.SECONDS) shouldBe true
+        result shouldBe null
+    }
+
     test("clearCache empties all cached results") {
         TranslationService.translateBatchSync(listOf("CachedText"))
         TranslationService.clearCache()
@@ -415,6 +435,13 @@ class TranslationServiceSpec : FunSpec({
         res shouldBe "https://api.example.com/translate"
     }
 
+    test("normalizeEndpoint prepends http when scheme is missing") {
+        val method = TranslationService::class.java.getDeclaredMethod("normalizeEndpoint", String::class.java)
+        method.isAccessible = true
+        val res = method.invoke(TranslationService, "localhost:5000")
+        res shouldBe "http://localhost:5000/translate"
+    }
+
     test("parseBatchResponse handles non-array translatedText gracefully") {
         val method = TranslationService::class.java.getDeclaredMethod(
             "parseBatchResponse",
@@ -426,6 +453,39 @@ class TranslationServiceSpec : FunSpec({
         val badJson = """{"translatedText": "not an array", "detectedLanguage": "en"}"""
         val res = method.invoke(TranslationService, badJson, listOf("Item1"), "es")
         res shouldBe null
+    }
+
+    test("parseBatchResponse parses array of detectedLanguages accurately") {
+        val method = TranslationService::class.java.getDeclaredMethod(
+            "parseBatchResponse",
+            String::class.java,
+            List::class.java,
+            String::class.java,
+        )
+        method.isAccessible = true
+        val batchJson = """
+            {
+              "translatedText": ["Hello", "World"],
+              "detectedLanguage": [
+                {"confidence": 95.0, "language": "fr"},
+                {"confidence": 90.0, "language": "de"}
+              ]
+            }
+        """.trimIndent()
+
+        @Suppress("UNCHECKED_CAST")
+        val res = method.invoke(
+            TranslationService,
+            batchJson,
+            listOf("Bonjour", "Welt"),
+            "en",
+        ) as List<TranslationResult>
+
+        res.size shouldBe 2
+        res[0].detectedLanguage shouldBe "fr"
+        res[0].translatedText shouldBe "Hello"
+        res[1].detectedLanguage shouldBe "de"
+        res[1].translatedText shouldBe "World"
     }
 
     test("testConnection reports success when API returns valid translation") {

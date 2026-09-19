@@ -5,12 +5,16 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "AbstractSignRendererMixin",
+    "AbstractSignEditScreenMixin",
     "BookViewScreenMixin",
     "ChatComponentAccessor",
     "ChatComponentMixin",
     "EntityRendererMixin",
     "ItemStackMixin",
-    "ChatScreenMixin"
+    "ChatScreenMixin",
+    "SignBlockEntityMixin",
+    "ClientLevelMixin",
+    "EntityMixin"
   ],
   "injectors": {
     "defaultRequire": 1

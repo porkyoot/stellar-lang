@@ -1,141 +1,175 @@
 package com.stellar.lang.sign
 
+import com.stellar.lang.input.StellarLangInputHandler
 import com.stellar.lang.service.TranslationService
-import net.minecraft.core.BlockPos
-import net.minecraft.network.chat.Component
-import net.minecraft.world.level.Level
+import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.world.level.block.entity.SignBlockEntity
 import net.minecraft.world.level.block.entity.SignText
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Manages translation for signs with multi-line joining and nearby spatial context.
+ * Manages translation for signs with text-based caching, format preservation, and lifecycle triggers.
  */
+@Suppress("TooManyFunctions")
 object SignTranslationManager {
-    private const val MAX_LINE_LENGTH = 15
-    private const val AREA_RADIUS = 5
-    private const val VERTICAL_RADIUS = 2
-    private const val MAX_NEARBY_CONTEXT_SIGNS = 3
-    private val signCache = ConcurrentHashMap<String, SignText>()
+    internal const val MAX_LINE_LENGTH = SignFormatHelper.MAX_LINE_LENGTH
+    private const val KEY_DELIMITER = "::"
 
-    @Volatile
-    var nearbyContextProvider: ((centerPos: BlockPos) -> String)? = null
+    // Cache is strictly for TEXT: "$targetLang::$sentence" -> SignFormatHelper.SignTranslationOutcome
+    internal val textOutcomeCache = ConcurrentHashMap<String, SignFormatHelper.SignTranslationOutcome>()
+    internal val signCache = ConcurrentHashMap<String, SignText>()
 
-    fun getOrRequestTranslatedSignText(sign: SignBlockEntity, isFront: Boolean): SignText? {
-        val sentence = extractSignSentence(sign, isFront) ?: return null
+    private fun buildTextKey(targetLang: String, sentence: String): String = "$targetLang$KEY_DELIMITER$sentence"
+
+    fun onSignLoaded(sign: SignBlockEntity) {
+        translateSignText(sign.frontText)
+        translateSignText(sign.backText)
+    }
+
+    fun onSignTextChanged(signText: SignText) {
+        translateSignText(signText)
+    }
+
+    @Suppress("CognitiveComplexMethod")
+    fun translateSignText(signText: SignText) {
         val config = TranslationService.getConfig()
+        if (!config.enabled.value() || !config.translateSigns.value()) return
+
+        val sentence = extractSentence(signText)
+        if (sentence.isBlank()) return
+
         val targetLang = config.targetLanguage.value()
-        val pos = sign.blockPos
-        val sideKey = if (isFront) "front" else "back"
-        val cacheKey = "${pos.asLong()}::$sideKey::$targetLang::${sentence.hashCode()}"
+        val textKey = buildTextKey(targetLang, sentence)
 
-        val cached = signCache[cacheKey]
-        if (cached != null) return cached
+        val cached = TranslationService.getCached(sentence, targetLang)
+        if (cached != null) {
+            if (!cached.isSameLanguage && !textOutcomeCache.containsKey(textKey)) {
+                textOutcomeCache[textKey] = applyTranslatedLinesWithOutcome(signText, cached.translatedText)
+            }
+            return
+        }
 
-        dispatchSignTranslation(sign, isFront, sentence, cacheKey)
+        TranslationService.translateAsync(sentence) { result ->
+            if (result != null && !result.isSameLanguage) {
+                textOutcomeCache[textKey] = applyTranslatedLinesWithOutcome(signText, result.translatedText)
+            }
+        }
+    }
+
+    @Suppress("ReturnCount")
+    fun getOutcome(signText: SignText): SignFormatHelper.SignTranslationOutcome? {
+        if (StellarLangInputHandler.isShowingOriginal()) return null
+        val config = TranslationService.getConfig()
+        if (!config.enabled.value() || !config.translateSigns.value()) return null
+
+        val sentence = extractSentence(signText)
+        if (sentence.isBlank()) return null
+
+        val targetLang = config.targetLanguage.value()
+        val textKey = buildTextKey(targetLang, sentence)
+
+        val outcome = textOutcomeCache[textKey]
+        if (outcome != null) return outcome
+
+        val cachedResult = TranslationService.getCached(sentence, targetLang)
+        if (cachedResult != null) {
+            if (cachedResult.isSameLanguage) return null
+            val newOutcome = applyTranslatedLinesWithOutcome(signText, cachedResult.translatedText)
+            textOutcomeCache[textKey] = newOutcome
+            return newOutcome
+        }
+
         return null
     }
 
-    private fun extractSignSentence(sign: SignBlockEntity, isFront: Boolean): String? {
-        val config = TranslationService.getConfig()
-        if (!config.enabled.value() || !config.translateSigns.value()) {
-            return null
-        }
-
-        val originalText = if (isFront) sign.frontText else sign.backText
-        val sentence = extractSentence(originalText)
-        return sentence.ifBlank { null }
+    fun getOutcome(sign: SignBlockEntity, isFront: Boolean): SignFormatHelper.SignTranslationOutcome? {
+        val text = if (isFront) sign.frontText else sign.backText
+        return getOutcome(text)
     }
 
-    private fun dispatchSignTranslation(
-        sign: SignBlockEntity,
-        isFront: Boolean,
-        sentence: String,
-        cacheKey: String,
-    ) {
-        val originalText = if (isFront) sign.frontText else sign.backText
-        val nearbyContext = gatherNearbySignContext(sign.level, sign.blockPos)
-        val fullQuery = if (nearbyContext.isNotBlank()) "$nearbyContext | $sentence" else sentence
-
-        TranslationService.translateAsync(fullQuery) { result ->
-            if (result != null && !result.isSameLanguage) {
-                val translatedSentence = extractTargetSentence(result.translatedText, nearbyContext.isNotBlank())
-                signCache[cacheKey] = applyTranslatedLines(originalText, translatedSentence)
-            }
+    fun getTranslatedSignText(signText: SignText): SignText? {
+        val outcome = getOutcome(signText)
+        if (outcome != null) {
+            return copyAppearance(signText, outcome.signText)
         }
+        onSignTextChanged(signText)
+        return null
     }
 
-    private fun applyTranslatedLines(originalText: SignText, translatedSentence: String): SignText {
-        val wrappedLines = wrapToSignLines(translatedSentence)
-        var newText = originalText
+    private fun copyAppearance(original: SignText, translated: SignText): SignText {
+        var result = original
         for (i in 0 until SignText.LINES) {
-            val line = wrappedLines.getOrElse(i) { "" }
-            newText = newText.setMessage(i, Component.literal(line))
+            result = result.setMessage(i, translated.getMessage(i, false))
         }
-        return newText
+        return result
     }
 
-    private fun extractSentence(signText: SignText): String {
+    fun getOrRequestTranslatedSignText(sign: SignBlockEntity, isFront: Boolean): SignText? {
+        val text = if (isFront) sign.frontText else sign.backText
+        val translated = getTranslatedSignText(text)
+        if (translated == null) {
+            translateSignText(text)
+        }
+        return translated
+    }
+
+    fun getExcessText(signText: SignText): String? = getOutcome(signText)?.excessText
+
+    fun getExcessText(sign: SignBlockEntity, isFront: Boolean): String? {
+        val text = if (isFront) sign.frontText else sign.backText
+        return getExcessText(text)
+    }
+
+    fun getFullTranslation(signText: SignText): String? = getOutcome(signText)?.fullTranslation
+
+    fun getFullTranslation(sign: SignBlockEntity, isFront: Boolean): String? {
+        val text = if (isFront) sign.frontText else sign.backText
+        return getFullTranslation(text)
+    }
+
+    fun clearCache() {
+        textOutcomeCache.clear()
+        signCache.clear()
+    }
+
+    fun applyTranslatedLines(originalText: SignText, translatedSentence: String): SignText {
+        return SignFormatHelper.applyTranslatedLinesWithOutcome(originalText, translatedSentence).signText
+    }
+
+    fun applyTranslatedLinesWithOutcome(
+        originalText: SignText,
+        translatedSentence: String,
+    ): SignFormatHelper.SignTranslationOutcome {
+        return SignFormatHelper.applyTranslatedLinesWithOutcome(originalText, translatedSentence)
+    }
+
+    fun isPureFormattingLine(line: String): Boolean = SignFormatHelper.isPureFormattingLine(line)
+
+    fun extractFraming(line: String): SignFormatHelper.LineFraming = SignFormatHelper.extractFraming(line)
+
+    fun wrapToSignLines(text: String): List<String> = SignFormatHelper.wrapToSignLines(text)
+
+    internal fun splitIntoWords(text: String, maxWordLength: Int = MAX_LINE_LENGTH): List<String> {
+        return SignFormatHelper.splitIntoWords(text, maxWordLength)
+    }
+
+    fun wrapTooltipLines(
+        text: String,
+        maxCharsPerLine: Int = SignTooltipRenderer.DEFAULT_TOOLTIP_WRAP_LENGTH,
+    ): List<String> {
+        return SignTooltipRenderer.wrapTooltipLines(text, maxCharsPerLine)
+    }
+
+    fun renderSignTooltipIfLooking(extractor: GuiGraphicsExtractor) {
+        SignTooltipRenderer.renderSignTooltipIfLooking(extractor)
+    }
+
+    fun extractSentence(signText: SignText): String {
         return signText.getMessages(false)
             .map { it.string.trim() }
+            .filter { it.isNotEmpty() && !isPureFormattingLine(it) }
+            .map { extractFraming(it).content }
             .filter { it.isNotEmpty() }
             .joinToString(" ")
-    }
-
-    private fun gatherNearbySignContext(level: Level?, centerPos: BlockPos): String {
-        val customContext = nearbyContextProvider?.invoke(centerPos)
-        if (customContext != null) return customContext
-
-        if (level == null) return ""
-        return gatherNearbySignContextWithGetter({ level.getBlockEntity(it) }, centerPos)
-    }
-
-    internal fun gatherNearbySignContextWithGetter(
-        blockEntityGetter: (BlockPos) -> Any?,
-        centerPos: BlockPos,
-    ): String {
-        val minPos = centerPos.offset(-AREA_RADIUS, -VERTICAL_RADIUS, -AREA_RADIUS)
-        val maxPos = centerPos.offset(AREA_RADIUS, VERTICAL_RADIUS, AREA_RADIUS)
-
-        return BlockPos.betweenClosed(minPos, maxPos)
-            .asSequence()
-            .filter { it != centerPos }
-            .mapNotNull { blockEntityGetter(it) as? SignBlockEntity }
-            .map { extractSentence(it.frontText) }
-            .filter { it.isNotBlank() }
-            .take(MAX_NEARBY_CONTEXT_SIGNS)
-            .joinToString(" | ")
-    }
-
-    private fun extractTargetSentence(fullTranslated: String, hasPrefix: Boolean): String {
-        if (!hasPrefix || !fullTranslated.contains("|")) {
-            return fullTranslated.trim()
-        }
-        val parts = fullTranslated.split("|")
-        return parts.last().trim()
-    }
-
-    @Suppress("CognitiveComplexMethod", "NestedBlockDepth")
-    private fun wrapToSignLines(text: String): List<String> {
-        val words = text.split("\\s+".toRegex())
-        val lines = mutableListOf<String>()
-        var currentLine = StringBuilder("[T] ")
-
-        for (word in words) {
-            if (currentLine.length + word.length + 1 <= MAX_LINE_LENGTH) {
-                if (currentLine.isNotEmpty() && !currentLine.endsWith(" ")) {
-                    currentLine.append(" ")
-                }
-                currentLine.append(word)
-            } else {
-                lines.add(currentLine.toString().trim())
-                currentLine = StringBuilder(word)
-                if (lines.size == SignText.LINES - 1) break
-            }
-        }
-        if (currentLine.isNotEmpty() && lines.size < SignText.LINES) {
-            lines.add(currentLine.toString().trim())
-        }
-        return lines
     }
 }

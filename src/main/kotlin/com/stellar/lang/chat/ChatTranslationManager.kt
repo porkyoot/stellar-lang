@@ -1,3 +1,5 @@
+@file:Suppress("TooManyFunctions")
+
 package com.stellar.lang.chat
 
 import com.stellar.lang.mixin.ChatComponentAccessor
@@ -10,17 +12,26 @@ import net.minecraft.network.chat.ClickEvent
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.HoverEvent
 import net.minecraft.network.chat.MutableComponent
+import net.minecraft.network.chat.contents.PlainTextContents
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
+import java.util.regex.Pattern
 
 /**
- * Manages translation of chat messages and provides clickable [T] toggle functionality.
+ * Manages translation of chat messages, compatible with Chat Heads and player prefixes,
+ * providing clickable [T] toggle functionality.
  */
 object ChatTranslationManager {
     const val COMMAND_PREFIX: String = "/stellar_lang_chat_toggle"
     private const val MIN_TRANSLATABLE_LENGTH = 2
     private val idGenerator = AtomicLong(1000L)
     private val trackedMessages = ConcurrentHashMap<Long, TrackedChatMessage>()
+
+    // Matches standard player chat prefixes, with or without Chat Heads player sprites:
+    // e.g. "<[Porkyoot head]Porkyoot> ", "<Dev1lroot> ", "[VIP] <Dev1lroot> ", "Dev1lroot: ", "Dev1lroot » "
+    private val CHAT_PREFIX_REGEX = Pattern.compile(
+        """^(\s*(?:\[[^\]]*\]\s*)*<[^>]+>\s*|^\s*\[[^\]]+\]\s+<\w+>\s*|^\s*[\w\u00A7]{2,20}\s*[:»>]\s*)""",
+    )
 
     @Volatile
     var refreshScheduler: ((TrackedChatMessage) -> Unit)? = null
@@ -31,10 +42,17 @@ object ChatTranslationManager {
     @Volatile
     var chatAccessorProvider: (() -> ChatComponentAccessor?)? = null
 
+    data class ParsedChatPayload(
+        val prefixComponent: Component?,
+        val messageText: String,
+    )
+
     class TrackedChatMessage(
         val id: Long,
         val originalComponent: Component,
         val plainText: String,
+        val prefixComponent: Component? = null,
+        val messageText: String = plainText,
         var translatedComponent: Component? = null,
         var isShowingOriginal: Boolean = false,
     ) {
@@ -48,6 +66,59 @@ object ChatTranslationManager {
         }
     }
 
+    fun extractChatPayload(component: Component): ParsedChatPayload {
+        val fullText = component.string
+        val matcher = CHAT_PREFIX_REGEX.matcher(fullText)
+        if (!matcher.find() || matcher.start() != 0) {
+            return ParsedChatPayload(null, fullText.trim())
+        }
+
+        val prefixText = matcher.group(1)
+        val prefixLength = prefixText.length
+        val messageText = fullText.substring(prefixLength).trim()
+        if (messageText.isBlank()) {
+            return ParsedChatPayload(null, fullText.trim())
+        }
+
+        val prefixComp = buildPrefixComponent(component.toFlatList(), prefixLength)
+        return ParsedChatPayload(prefixComp, messageText)
+    }
+
+    private fun buildPrefixComponent(flatList: List<Component>, prefixLength: Int): Component? {
+        val prefixComponents = mutableListOf<Component>()
+        var currentLen = 0
+
+        for (comp in flatList) {
+            if (currentLen >= prefixLength) break
+
+            val compLen = comp.string.length
+            if (currentLen + compLen <= prefixLength) {
+                prefixComponents.add(comp)
+                currentLen += compLen
+            } else {
+                val needed = prefixLength - currentLen
+                prefixComponents.add(sliceComponent(comp, needed))
+                currentLen += needed
+            }
+        }
+
+        if (prefixComponents.isEmpty()) return null
+        val res = Component.empty()
+        prefixComponents.forEach { res.append(it) }
+        return res
+    }
+
+    private fun sliceComponent(comp: Component, needed: Int): Component {
+        val contents = comp.contents
+        if (contents is PlainTextContents) {
+            val text = contents.text()
+            if (needed <= text.length) {
+                return Component.literal(text.substring(0, needed)).setStyle(comp.style)
+            }
+        }
+        return comp
+    }
+
     fun processIncomingMessage(component: Component): Component {
         val config = TranslationService.getConfig()
         if (!config.enabled.value() || !config.translateChat.value()) {
@@ -55,36 +126,48 @@ object ChatTranslationManager {
         }
 
         val plainText = component.string.trim()
-        if (shouldSkipMessage(plainText)) {
+        val payload = extractChatPayload(component)
+        if (shouldSkipMessage(plainText) || shouldSkipMessage(payload.messageText)) {
             return component
         }
 
-        return resolveAndTranslate(component, plainText, config.targetLanguage.value())
+        return resolveAndTranslate(component, payload, config.targetLanguage.value())
     }
 
-    private fun resolveAndTranslate(component: Component, plainText: String, targetLang: String): Component {
+    private fun resolveAndTranslate(
+        component: Component,
+        payload: ParsedChatPayload,
+        targetLang: String,
+    ): Component {
         val id = idGenerator.incrementAndGet()
-        val tracked = TrackedChatMessage(id, component, plainText)
+        val plainText = component.string.trim()
+        val tracked = TrackedChatMessage(
+            id = id,
+            originalComponent = component,
+            plainText = plainText,
+            prefixComponent = payload.prefixComponent,
+            messageText = payload.messageText,
+        )
         trackedMessages[id] = tracked
 
-        val cached = TranslationService.getCached(plainText, targetLang)
+        val cached = TranslationService.getCached(payload.messageText, targetLang)
         if (cached != null && !cached.isSameLanguage) {
-            val translated = createTranslatedComponent(id, cached)
+            val translated = createTranslatedComponent(id, cached, payload.prefixComponent)
             tracked.translatedComponent = translated
             return translated
         }
 
         if (cached == null) {
-            triggerBackgroundChatTranslation(tracked, plainText)
+            triggerBackgroundChatTranslation(tracked, payload.messageText)
         }
 
         return component
     }
 
-    private fun triggerBackgroundChatTranslation(tracked: TrackedChatMessage, plainText: String) {
-        TranslationService.translateAsync(plainText) { result ->
+    private fun triggerBackgroundChatTranslation(tracked: TrackedChatMessage, messageText: String) {
+        TranslationService.translateAsync(messageText) { result ->
             if (result != null && !result.isSameLanguage) {
-                val translated = createTranslatedComponent(tracked.id, result)
+                val translated = createTranslatedComponent(tracked.id, result, tracked.prefixComponent)
                 tracked.translatedComponent = translated
                 scheduleChatRefresh(tracked)
             }
@@ -95,7 +178,11 @@ object ChatTranslationManager {
         return text.length < MIN_TRANSLATABLE_LENGTH || text.startsWith("/") || text.startsWith("[T]")
     }
 
-    private fun createTranslatedComponent(id: Long, result: TranslationResult): MutableComponent {
+    fun createTranslatedComponent(
+        id: Long,
+        result: TranslationResult,
+        prefixComponent: Component? = null,
+    ): MutableComponent {
         val badge = Component.literal("[T] ").withStyle { style ->
             style.withColor(ChatFormatting.AQUA)
                 .withBold(true)
@@ -111,7 +198,12 @@ object ChatTranslationManager {
                 .withClickEvent(ClickEvent.RunCommand("$COMMAND_PREFIX $id"))
         }
 
-        return Component.empty().append(badge).append(Component.literal(result.translatedText))
+        val root = Component.empty().append(badge)
+        if (prefixComponent != null) {
+            root.append(prefixComponent)
+        }
+        root.append(Component.literal(result.translatedText))
+        return root
     }
 
     private fun scheduleChatRefresh(tracked: TrackedChatMessage) {
@@ -142,9 +234,7 @@ object ChatTranslationManager {
             tracked.translatedComponent ?: tracked.originalComponent
         }
 
-        val index = messages.indexOfFirst { msg ->
-            msg.content() == tracked.originalComponent || msg.content() == tracked.translatedComponent
-        }
+        val index = messages.indexOfFirst { msg -> isMatchingMessage(msg, tracked) }
 
         if (index != -1) {
             val oldMsg = messages[index]
@@ -155,8 +245,42 @@ object ChatTranslationManager {
                 oldMsg.source(),
                 oldMsg.tag(),
             )
+            copyChatHeadsData(oldMsg, newMsg)
             messages[index] = newMsg
             accessor.stellarRefreshTrimmedMessages()
+        }
+    }
+
+    private fun isMatchingMessage(msg: GuiMessage, tracked: TrackedChatMessage): Boolean {
+        val content = msg.content()
+        val text = content.string
+        val matchesComponent = content === tracked.originalComponent ||
+            content == tracked.originalComponent ||
+            content === tracked.translatedComponent ||
+            content == tracked.translatedComponent
+        val matchesText = text == tracked.plainText ||
+            tracked.translatedComponent != null && text == tracked.translatedComponent?.string
+        return matchesComponent || matchesText
+    }
+
+    internal fun copyChatHeadsData(source: Any, target: Any) {
+        runCatching {
+            val allSourceMethods = source.javaClass.methods + source.javaClass.declaredMethods
+            val allTargetMethods = target.javaClass.methods + target.javaClass.declaredMethods
+            val getMethod = allSourceMethods.firstOrNull {
+                it.name.contains("chatheads") && it.name.contains("getHeadData")
+            }
+            val setMethod = allTargetMethods.firstOrNull {
+                it.name.contains("chatheads") && it.name.contains("setHeadData")
+            }
+            if (getMethod != null && setMethod != null) {
+                getMethod.isAccessible = true
+                setMethod.isAccessible = true
+                val data = getMethod.invoke(source)
+                if (data != null) {
+                    setMethod.invoke(target, data)
+                }
+            }
         }
     }
 

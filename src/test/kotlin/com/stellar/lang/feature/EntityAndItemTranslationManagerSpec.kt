@@ -8,13 +8,28 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
+import net.minecraft.SharedConstants
+import net.minecraft.core.Holder
+import net.minecraft.core.component.DataComponentMap
+import net.minecraft.core.component.DataComponents
+import net.minecraft.core.component.PatchedDataComponentMap
 import net.minecraft.network.chat.Component
+import net.minecraft.network.syncher.EntityDataAccessor
+import net.minecraft.network.syncher.SynchedEntityData
+import net.minecraft.server.Bootstrap
+import net.minecraft.world.entity.decoration.ArmorStand
+import net.minecraft.world.item.Item
+import net.minecraft.world.item.ItemStack
+import java.util.Optional
 
+@Suppress("LargeClass")
 class EntityAndItemTranslationManagerSpec : FunSpec({
     lateinit var server: com.sun.net.httpserver.HttpServer
     var serverPort: Int = 0
 
     beforeSpec {
+        SharedConstants.tryDetectVersion()
+        Bootstrap.bootStrap()
         server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
         serverPort = server.address.port
         server.createContext("/translate") { exchange ->
@@ -61,43 +76,24 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
         method.invoke(EntityTranslationManager, valid) shouldBe null
     }
 
-    test("EntityTranslationManager resolveEntityTranslation formats badge and respects same language") {
-        val method = EntityTranslationManager::class.java.getDeclaredMethod(
-            "resolveEntityTranslation",
-            String::class.java,
-            String::class.java,
-            String::class.java,
-            Component::class.java,
-        )
-        method.isAccessible = true
-
+    test("EntityTranslationManager formats badge and respects same language") {
+        EntityTranslationManager.clearCache()
         val orig = Component.literal("Loup Sauvage")
 
         // 1. Same language (detected 'en' == target 'en')
         val sameResultFake = TranslationResult("Loup Sauvage", "Loup Sauvage", "en", "en", true)
         TranslationService.putCache(sameResultFake)
 
-        val sameResult = method.invoke(
-            EntityTranslationManager,
-            "Loup Sauvage",
-            "en",
-            "en::${"Loup Sauvage".hashCode()}",
-            orig,
-        ) as Component
+        val sameResult = EntityTranslationManager.translateEntityName(null, orig)
         sameResult.string shouldBe "Loup Sauvage"
 
         // 2. Different language (detected 'fr' -> target 'en')
+        EntityTranslationManager.clearCache()
         TranslationService.clearCache()
         val diffResultFake = TranslationResult("Loup Sauvage", "Wild Wolf", "fr", "en", false)
         TranslationService.putCache(diffResultFake)
 
-        val diffResult = method.invoke(
-            EntityTranslationManager,
-            "Loup Sauvage",
-            "en",
-            "en::${"Loup Sauvage".hashCode()}",
-            orig,
-        ) as Component
+        val diffResult = EntityTranslationManager.translateEntityName(null, orig)
         diffResult.string shouldContain "[T] "
         diffResult.string shouldContain "Wild Wolf"
     }
@@ -164,33 +160,35 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
         val immediatelyReturned = EntityTranslationManager.translateEntityName(original = uncachedOrig)
         immediatelyReturned shouldBe uncachedOrig
 
-        // 5. Test async callback populating entityCache
-        val resolveEntityMethod = EntityTranslationManager::class.java.getDeclaredMethod(
-            "resolveEntityTranslation",
-            String::class.java,
-            String::class.java,
-            String::class.java,
-            Component::class.java,
-        )
-        resolveEntityMethod.isAccessible = true
-        val entityCacheField = EntityTranslationManager::class.java.getDeclaredField("entityCache")
-        entityCacheField.isAccessible = true
-        @Suppress("UNCHECKED_CAST")
-        val entityCache = entityCacheField.get(EntityTranslationManager) as
-            java.util.concurrent.ConcurrentHashMap<String, Component>
-        entityCache.clear()
+        // 5. Test onEntityNameChanged edge cases & async callback populating textComponentCache
+        EntityTranslationManager.clearCache()
         TranslationService.clearCache()
-        resolveEntityMethod.invoke(
-            EntityTranslationManager,
-            "Oiseau Blanc",
-            "en",
-            "en::${"Oiseau Blanc".hashCode()}",
-            uncachedOrig,
-        )
+
+        // 5a. Blank or short text returns early
+        EntityTranslationManager.onEntityNameChanged(Component.literal("   "))
+        EntityTranslationManager.onEntityNameChanged(Component.literal("A"))
+
+        // 5b. Already in TranslationService cache (different language)
+        val frResult = TranslationResult("Chien Noir", "Black Dog", "fr", "en", false)
+        TranslationService.putCache(frResult)
+        EntityTranslationManager.onEntityNameChanged(Component.literal("Chien Noir"))
+        EntityTranslationManager.textComponentCache.containsKey("en::Chien Noir") shouldBe true
+
+        // 5c. Already in textComponentCache (no-op)
+        EntityTranslationManager.onEntityNameChanged(Component.literal("Chien Noir"))
+
+        // 5d. In TranslationService cache but sameLanguage
+        val sameLangResult = TranslationResult("Same", "Same", "en", "en", true)
+        TranslationService.putCache(sameLangResult)
+        EntityTranslationManager.onEntityNameChanged(Component.literal("Same"))
+        EntityTranslationManager.textComponentCache.containsKey("en::Same") shouldBe false
+
+        // 5e. Uncached triggers async translation
+        EntityTranslationManager.onEntityNameChanged(uncachedOrig)
         var entityPopulated = false
         var entityAttempts = 0
         while (entityAttempts++ < 30) {
-            if (entityCache.containsKey("en::${"Oiseau Blanc".hashCode()}")) {
+            if (EntityTranslationManager.textComponentCache.containsKey("en::Oiseau Blanc")) {
                 entityPopulated = true
                 break
             }
@@ -199,33 +197,119 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
         entityPopulated shouldBe true
     }
 
+    test("EntityTranslationManager onEntityLoaded triggers on customName and handles null") {
+        val unsafeField = sun.misc.Unsafe::class.java.getDeclaredField("theUnsafe")
+        unsafeField.isAccessible = true
+        val unsafe = unsafeField.get(null) as sun.misc.Unsafe
+
+        val accessorField = net.minecraft.world.entity.Entity::class.java.getDeclaredField("DATA_CUSTOM_NAME")
+        accessorField.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val accessor = accessorField.get(null) as EntityDataAccessor<Optional<Component>>
+
+        val dataItem = SynchedEntityData.DataItem(accessor, Optional.of(Component.literal("Petit Cochon")))
+        val items = java.lang.reflect.Array.newInstance(
+            SynchedEntityData.DataItem::class.java,
+            accessor.id + 1,
+        ) as Array<SynchedEntityData.DataItem<*>?>
+        items[accessor.id] = dataItem
+
+        val synchedData = unsafe.allocateInstance(SynchedEntityData::class.java) as SynchedEntityData
+        val itemsField = SynchedEntityData::class.java.getDeclaredField("itemsById")
+        itemsField.isAccessible = true
+        itemsField.set(synchedData, items)
+
+        val entity = unsafe.allocateInstance(ArmorStand::class.java) as ArmorStand
+        val entityDataField = net.minecraft.world.entity.Entity::class.java.getDeclaredField("entityData")
+        entityDataField.isAccessible = true
+        entityDataField.set(entity, synchedData)
+
+        val emptyItem = SynchedEntityData.DataItem(accessor, Optional.empty<Component>())
+        items[accessor.id] = emptyItem
+        EntityTranslationManager.onEntityLoaded(entity)
+
+        items[accessor.id] = dataItem
+        EntityTranslationManager.onEntityLoaded(entity)
+
+        var entityPopulated = false
+        var attempts = 0
+        while (attempts++ < 30) {
+            if (EntityTranslationManager.textComponentCache.containsKey("en::Petit Cochon")) {
+                entityPopulated = true
+                break
+            }
+            Thread.sleep(50)
+        }
+        entityPopulated shouldBe true
+    }
+
+    fun createMockStack(customName: Component?): ItemStack {
+        val unsafeField = sun.misc.Unsafe::class.java.getDeclaredField("theUnsafe")
+        unsafeField.isAccessible = true
+        val unsafe = unsafeField.get(null) as sun.misc.Unsafe
+        val stack = unsafe.allocateInstance(ItemStack::class.java) as ItemStack
+        val compField = ItemStack::class.java.getDeclaredField("components")
+        compField.isAccessible = true
+        val itemField = ItemStack::class.java.getDeclaredField("item")
+        itemField.isAccessible = true
+        val countField = ItemStack::class.java.getDeclaredField("count")
+        countField.isAccessible = true
+
+        val dummyItem = unsafe.allocateInstance(Item::class.java) as Item
+        itemField.set(stack, Holder.direct(dummyItem))
+        countField.set(stack, 1)
+
+        val map = PatchedDataComponentMap(DataComponentMap.EMPTY)
+        if (customName != null) {
+            map.set(DataComponents.CUSTOM_NAME, customName)
+        }
+        compField.set(stack, map)
+        return stack
+    }
+
     test("ItemTranslationManager translateItemName full workflow and caching") {
+        ItemTranslationManager.clearCache()
         val orig = Component.literal("Hache en fer")
         val fakeResult = TranslationResult("Hache en fer", "Iron Axe", "fr", "en", false)
         TranslationService.putCache(fakeResult)
 
-        // 1. First translation (cache hit) using default parameter syntax
-        val trans1 = ItemTranslationManager.translateItemName(original = orig)
+        // 0. Non-renamed vanilla stack or null stack should return original
+        val vanillaStack = createMockStack(null)
+        ItemTranslationManager.translateItemName(vanillaStack, orig) shouldBe orig
+        ItemTranslationManager.translateItemName(null, orig) shouldBe orig
+        ItemTranslationManager.translateItemName(original = orig) shouldBe orig
+
+        // 1. Renamed stack translates correctly (cache hit)
+        val renamedStack = createMockStack(orig)
+        val trans1 = ItemTranslationManager.translateItemName(renamedStack, orig)
         trans1.string shouldContain "[T] "
         trans1.string shouldContain "Iron Axe"
 
         // 2. Second translation (item cache hit)
-        val trans2 = ItemTranslationManager.translateItemName(null, orig)
+        val trans2 = ItemTranslationManager.translateItemName(renamedStack, orig)
         trans2 shouldBe trans1
 
-        // 3. Same language returns original
+        // 3. Showing original key held down
+        com.stellar.lang.input.StellarLangInputHandler.keyStateProvider = { true }
+        val showingOrig = ItemTranslationManager.translateItemName(renamedStack, orig)
+        showingOrig shouldBe orig
+        com.stellar.lang.input.StellarLangInputHandler.keyStateProvider = null
+
+        // 4. Same language returns original
         val sameOrig = Component.literal("Golden Apple")
         val sameResult = TranslationResult("Golden Apple", "Golden Apple", "en", "en", true)
         TranslationService.putCache(sameResult)
-        val transSame = ItemTranslationManager.translateItemName(null, sameOrig)
+        val sameStack = createMockStack(sameOrig)
+        val transSame = ItemTranslationManager.translateItemName(sameStack, sameOrig)
         transSame shouldBe sameOrig
 
-        // 4. Uncached translation triggers async and returns original immediately
+        // 5. Uncached translation triggers async and returns original immediately
         val uncachedOrig = Component.literal("Arc Magique")
-        val immediatelyReturned = ItemTranslationManager.translateItemName(original = uncachedOrig)
+        val uncachedStack = createMockStack(uncachedOrig)
+        val immediatelyReturned = ItemTranslationManager.translateItemName(uncachedStack, uncachedOrig)
         immediatelyReturned shouldBe uncachedOrig
 
-        // 5. Test async callback populating itemCache
+        // 6. Test async callback populating itemCache
         val resolveItemMethod = ItemTranslationManager::class.java.getDeclaredMethod(
             "resolveItemTranslation",
             String::class.java,
@@ -259,24 +343,28 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
         }
         itemPopulated shouldBe true
 
-        // 6. Test skip conditions directly via translateItemName
-        ItemTranslationManager.translateItemName(null, Component.literal("x")) shouldBe Component.literal("x")
+        // 7. Test skip conditions directly via translateItemName
+        val shortStack = createMockStack(Component.literal("x"))
+        ItemTranslationManager.translateItemName(shortStack, Component.literal("x")) shouldBe Component.literal("x")
+
+        val alreadyTransStack = createMockStack(Component.literal("[T] Item"))
         ItemTranslationManager.translateItemName(
-            null,
+            alreadyTransStack,
             Component.literal("[T] Item"),
         ) shouldBe Component.literal("[T] Item")
 
+        val diamondStack = createMockStack(Component.literal("Diamond"))
         val config = TranslationService.getConfig()
         config.translateItems.setValue(false, false)
         ItemTranslationManager.translateItemName(
-            null,
+            diamondStack,
             Component.literal("Diamond"),
         ) shouldBe Component.literal("Diamond")
 
         config.translateItems.setValue(true, false)
         config.enabled.setValue(false, false)
         ItemTranslationManager.translateItemName(
-            null,
+            diamondStack,
             Component.literal("Diamond"),
         ) shouldBe Component.literal("Diamond")
         config.enabled.setValue(true, false)

@@ -1,5 +1,6 @@
 package com.stellar.lang.item
 
+import com.stellar.lang.input.StellarLangInputHandler
 import com.stellar.lang.service.TranslationService
 import net.minecraft.ChatFormatting
 import net.minecraft.network.chat.Component
@@ -14,8 +15,13 @@ object ItemTranslationManager {
     private const val MIN_TRANSLATABLE_LENGTH = 2
     private val itemCache = ConcurrentHashMap<String, Component>()
 
-    @Suppress("UnusedParameter")
+    fun clearCache() {
+        itemCache.clear()
+    }
+
     fun translateItemName(stack: ItemStack? = null, original: Component): Component {
+        if (StellarLangInputHandler.isShowingOriginal()) return original
+        if (stack == null || stack.customName == null) return original
         val plainText = getTranslatableText(original) ?: return original
         val config = TranslationService.getConfig()
         val targetLang = config.targetLanguage.value()

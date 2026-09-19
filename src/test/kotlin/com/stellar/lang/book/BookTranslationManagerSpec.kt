@@ -13,6 +13,7 @@ import java.util.concurrent.TimeUnit
 class BookTranslationManagerSpec : FunSpec({
     beforeEach {
         TranslationService.clearCache()
+        BookTranslationManager.clearCache()
         val config = TranslationService.getConfig()
         config.enabled.setValue(true, false)
         config.translateBooks.setValue(true, false)
@@ -32,7 +33,7 @@ class BookTranslationManagerSpec : FunSpec({
         latch1.await(2, TimeUnit.SECONDS) shouldBe true
         res1 shouldBe null
 
-        val blankBook = BookViewScreen.BookAccess(listOf(Component.literal("   ")))
+        val blankBook = BookViewScreen.BookAccess(listOf(Component.literal("   "), Component.literal("")))
         val latch2 = CountDownLatch(1)
         var res2: BookViewScreen.BookAccess? = BookViewScreen.BookAccess(emptyList())
         BookTranslationManager.translateBookAsync(blankBook) { res ->
@@ -61,19 +62,23 @@ class BookTranslationManagerSpec : FunSpec({
         )
         val book = BookViewScreen.BookAccess(originalPages)
 
-        // Seed TranslationService cache
-        val joined = "Bonjour tout le monde.\n\n---PAGE_SPLIT---\n\nVoici le deuxieme chapitre."
-        val translatedJoined = "Hello everyone.\n\n---PAGE_SPLIT---\n\nHere is the second chapter."
-        val fakeResult = TranslationResult(
-            originalText = joined,
-            translatedText = translatedJoined,
+        // Seed TranslationService cache for both pages
+        val page1Result = TranslationResult(
+            originalText = "Bonjour tout le monde.",
+            translatedText = "Hello everyone.",
             detectedLanguage = "fr",
             targetLanguage = "en",
             isSameLanguage = false,
         )
-
-        // Put into cache directly
-        TranslationService.putCache(fakeResult)
+        val page2Result = TranslationResult(
+            originalText = "Voici le deuxieme chapitre.",
+            translatedText = "Here is the second chapter.",
+            detectedLanguage = "fr",
+            targetLanguage = "en",
+            isSameLanguage = false,
+        )
+        TranslationService.putCache(page1Result)
+        TranslationService.putCache(page2Result)
 
         val latch = CountDownLatch(1)
         var translatedAccess: BookViewScreen.BookAccess? = null
@@ -96,6 +101,9 @@ class BookTranslationManagerSpec : FunSpec({
         }
         latch2.await(2, TimeUnit.SECONDS) shouldBe true
         secondAccess shouldBe translatedAccess
+
+        // Clear cache
+        BookTranslationManager.clearCache()
     }
 
     test("translateBookAsync returns null when detected language matches target language") {
@@ -118,5 +126,42 @@ class BookTranslationManagerSpec : FunSpec({
         }
         latch.await(2, TimeUnit.SECONDS) shouldBe true
         res shouldBe null
+    }
+
+    test("translateBookAsync preserves pages that do not need translation") {
+        val originalPages = listOf(
+            Component.literal("Kapitel Eins"),
+            Component.literal("Chapter Two in English"),
+        )
+        val book = BookViewScreen.BookAccess(originalPages)
+
+        val res1 = TranslationResult(
+            originalText = "Kapitel Eins",
+            translatedText = "Chapter One",
+            detectedLanguage = "de",
+            targetLanguage = "en",
+            isSameLanguage = false,
+        )
+        val res2 = TranslationResult(
+            originalText = "Chapter Two in English",
+            translatedText = "Chapter Two in English",
+            detectedLanguage = "en",
+            targetLanguage = "en",
+            isSameLanguage = true,
+        )
+        TranslationService.putCache(res1)
+        TranslationService.putCache(res2)
+
+        val latch = CountDownLatch(1)
+        var translatedAccess: BookViewScreen.BookAccess? = null
+        BookTranslationManager.translateBookAsync(book) { r ->
+            translatedAccess = r
+            latch.countDown()
+        }
+        latch.await(2, TimeUnit.SECONDS) shouldBe true
+        translatedAccess shouldNotBe null
+        translatedAccess!!.pageCount shouldBe 2
+        translatedAccess!!.getPage(0).string shouldBe "Chapter One"
+        translatedAccess!!.getPage(1).string shouldBe "Chapter Two in English"
     }
 })

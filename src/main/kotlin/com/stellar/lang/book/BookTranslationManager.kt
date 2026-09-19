@@ -7,46 +7,46 @@ import net.minecraft.network.chat.Component
 import java.util.concurrent.ConcurrentHashMap
 
 /**
- * Manages translation of books by combining pages for continuous context.
+ * Manages translation of written and writable books page-by-page using batch translation.
  */
 object BookTranslationManager {
-    private const val PAGE_DELIMITER = "\n\n---PAGE_SPLIT---\n\n"
     private val translatedBooks = ConcurrentHashMap<String, BookViewScreen.BookAccess>()
 
     fun translateBookAsync(bookAccess: BookViewScreen.BookAccess, callback: (BookViewScreen.BookAccess?) -> Unit) {
-        val joinedText = extractBookContent(bookAccess)
-        if (joinedText == null) {
+        val originalPages = bookAccess.pages()
+        val pageTexts = originalPages.map { it.string.trim() }
+
+        if (!isTranslationEligible(pageTexts)) {
             callback(null)
             return
         }
 
-        dispatchBookTranslation(joinedText, callback)
-    }
-
-    private fun extractBookContent(bookAccess: BookViewScreen.BookAccess): String? {
         val config = TranslationService.getConfig()
-        if (!config.enabled.value() || !config.translateBooks.value()) {
-            return null
-        }
-
-        val pages = bookAccess.pages()
-        if (pages.isEmpty()) return null
-
-        val joined = pages.joinToString(separator = PAGE_DELIMITER) { it.string.trim() }
-        return joined.ifBlank { null }
-    }
-
-    private fun dispatchBookTranslation(joinedText: String, callback: (BookViewScreen.BookAccess?) -> Unit) {
-        val config = TranslationService.getConfig()
-        val cacheKey = "${config.targetLanguage.value()}::${joinedText.hashCode()}"
+        val targetLang = config.targetLanguage.value()
+        val cacheKey = "$targetLang::${pageTexts.joinToString("||") { it.hashCode().toString() }}"
         val cached = translatedBooks[cacheKey]
         if (cached != null) {
             callback(cached)
             return
         }
 
-        TranslationService.translateAsync(joinedText) { result ->
-            val access = parseTranslatedPages(result)
+        dispatchBatchTranslation(originalPages, pageTexts, cacheKey, callback)
+    }
+
+    private fun isTranslationEligible(pageTexts: List<String>): Boolean {
+        val config = TranslationService.getConfig()
+        val enabled = config.enabled.value() && config.translateBooks.value()
+        return enabled && pageTexts.isNotEmpty() && pageTexts.any { it.isNotBlank() }
+    }
+
+    private fun dispatchBatchTranslation(
+        originalPages: List<Component>,
+        pageTexts: List<String>,
+        cacheKey: String,
+        callback: (BookViewScreen.BookAccess?) -> Unit,
+    ) {
+        TranslationService.translateBatchAsync(pageTexts) { results ->
+            val access = processBatchResults(originalPages, results)
             if (access != null) {
                 translatedBooks[cacheKey] = access
             }
@@ -54,13 +54,31 @@ object BookTranslationManager {
         }
     }
 
-    private fun parseTranslatedPages(result: TranslationResult?): BookViewScreen.BookAccess? {
-        if (result == null || result.isSameLanguage) return null
+    private fun processBatchResults(
+        originalPages: List<Component>,
+        results: List<TranslationResult>?,
+    ): BookViewScreen.BookAccess? {
+        if (results.isNullOrEmpty()) return null
 
-        val splitPages = result.translatedText.split("---PAGE_SPLIT---")
-        val newPages = splitPages.map { pageText ->
-            Component.literal(pageText.trim())
+        val hasAnyTranslation = results.any { isValidTranslation(it) }
+        if (!hasAnyTranslation) return null
+
+        val newPages = originalPages.mapIndexed { index, origComp ->
+            val res = results.getOrNull(index)
+            if (res != null && isValidTranslation(res)) {
+                Component.literal(res.translatedText).setStyle(origComp.style)
+            } else {
+                origComp
+            }
         }
         return BookViewScreen.BookAccess(newPages)
+    }
+
+    private fun isValidTranslation(res: TranslationResult): Boolean {
+        return !res.isSameLanguage && res.translatedText.isNotBlank()
+    }
+
+    fun clearCache() {
+        translatedBooks.clear()
     }
 }

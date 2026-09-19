@@ -13,6 +13,13 @@ import net.minecraft.network.chat.Component
  * Factory for creating the Cloth Config GUI screen bound to StellarLangConfig.
  */
 object LangClothConfigScreen {
+    private val testToastId by lazy {
+        runCatching { net.minecraft.client.gui.components.toasts.SystemToast.SystemToastId() }.getOrNull()
+    }
+    private val isTesting = java.util.concurrent.atomic.AtomicBoolean(false)
+    private var lastTestTimeMs = 0L
+    private const val TEST_DEBOUNCE_MS = 1000L
+
     fun create(parent: Screen?): Screen {
         val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")
             ?: ConfigManager.register(StellarLangMod.MOD_ID, "main", StellarLangConfig::class.java)
@@ -91,7 +98,9 @@ object LangClothConfigScreen {
         return entries
             .startStrField(Component.literal("LibreTranslate API Host"), config.apiHost.value())
             .setDefaultValue("https://libretranslate.com")
-            .setTooltip(Component.literal("Base URL of LibreTranslate service (public or self-hosted)"))
+            .setTooltip(
+                Component.literal("Base URL of LibreTranslate (e.g. http://localhost:5000)"),
+            )
             .setErrorSupplier { typed ->
                 onChanged(typed.trim())
                 java.util.Optional.empty()
@@ -123,21 +132,25 @@ object LangClothConfigScreen {
         getHost: () -> String,
         getKey: () -> String,
     ): me.shedaniel.clothconfig2.api.AbstractConfigListEntry<*> {
-        var initialized = false
+        var lastToggleValue = false
         var testStatus = "Click to Test"
         var testError: String? = null
 
         return entries
             .startBooleanToggle(Component.literal("Test Translation Connection"), false)
-            .setYesNoTextSupplier { _ ->
-                if (!initialized) {
-                    initialized = true
-                } else {
-                    testStatus = "⌛ Testing..."
-                    testError = null
-                    triggerConnectionTest(config, getHost(), getKey()) { status, error ->
-                        testStatus = status
-                        testError = error
+            .setYesNoTextSupplier { boolValue ->
+                if (boolValue != lastToggleValue) {
+                    lastToggleValue = boolValue
+                    val now = System.currentTimeMillis()
+                    if (now - lastTestTimeMs >= TEST_DEBOUNCE_MS && isTesting.compareAndSet(false, true)) {
+                        lastTestTimeMs = now
+                        testStatus = "⌛ Testing..."
+                        testError = null
+                        triggerConnectionTest(config, getHost(), getKey()) { status, error ->
+                            testStatus = status
+                            testError = error
+                            isTesting.set(false)
+                        }
                     }
                 }
                 Component.literal(testStatus)
@@ -170,7 +183,7 @@ object LangClothConfigScreen {
                     showToast("Stellar Lang", "Connected! 'Hello' -> '$translated'")
                 },
                 onFailure = { err ->
-                    val msg = err.message ?: "Connection failed"
+                    val msg = err.message ?: err::class.simpleName ?: "Connection failed"
                     onUpdate("❌ Failed (Click to Retry)", msg)
                     showToast("Stellar Lang", "Test Failed: $msg")
                 },
@@ -179,13 +192,14 @@ object LangClothConfigScreen {
     }
 
     private fun showToast(title: String, message: String) {
+        val toastId = testToastId ?: return
         runCatching {
             val mc = net.minecraft.client.Minecraft.getInstance()
             mc.execute {
                 val toastManager = mc.gui.toastManager()
                 net.minecraft.client.gui.components.toasts.SystemToast.addOrUpdate(
                     toastManager,
-                    net.minecraft.client.gui.components.toasts.SystemToast.SystemToastId(),
+                    toastId,
                     Component.literal(title),
                     Component.literal(message),
                 )

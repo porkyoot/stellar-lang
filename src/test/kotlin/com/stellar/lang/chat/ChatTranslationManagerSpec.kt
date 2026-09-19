@@ -1,3 +1,5 @@
+@file:Suppress("LargeClass")
+
 package com.stellar.lang.chat
 
 import com.stellar.lang.service.TranslationResult
@@ -297,5 +299,118 @@ class ChatTranslationManagerSpec : FunSpec({
 
         ChatTranslationManager.chatAccessorProvider = null
         ChatTranslationManager.minecraftExecutor = null
+    }
+
+    test("extractChatPayload separates Chat Heads prefix and retains player head component") {
+        // Build a simulated Chat Heads component: < + [Player head] + Player + >  + message
+        val headComp = Component.literal("[Dev1lroot head]")
+        val chatHeadsMessage = Component.empty()
+            .append(Component.literal("<"))
+            .append(headComp)
+            .append(Component.literal("Dev1lroot"))
+            .append(Component.literal("> "))
+            .append(Component.literal("Bonjour tout le monde"))
+
+        val payload = ChatTranslationManager.extractChatPayload(chatHeadsMessage)
+        payload.messageText shouldBe "Bonjour tout le monde"
+        payload.prefixComponent shouldNotBe null
+        payload.prefixComponent!!.string shouldBe "<[Dev1lroot head]Dev1lroot> "
+    }
+
+    test("extractChatPayload separates standard player brackets and colon prefixes") {
+        val standard = Component.literal("<Dev1lroot> Hola amigo")
+        val payload1 = ChatTranslationManager.extractChatPayload(standard)
+        payload1.messageText shouldBe "Hola amigo"
+        payload1.prefixComponent?.string shouldBe "<Dev1lroot> "
+
+        val colonFormat = Component.literal("Dev1lroot: Guten Tag")
+        val payload2 = ChatTranslationManager.extractChatPayload(colonFormat)
+        payload2.messageText shouldBe "Guten Tag"
+        payload2.prefixComponent?.string shouldBe "Dev1lroot: "
+
+        val systemMsg = Component.literal("Server is restarting")
+        val payload3 = ChatTranslationManager.extractChatPayload(systemMsg)
+        payload3.messageText shouldBe "Server is restarting"
+        payload3.prefixComponent shouldBe null
+    }
+
+    test("processIncomingMessage with Chat Heads format preserves prefix and prepends [T]") {
+        val headComp = Component.literal("[Porkyoot head]")
+        val incoming = Component.empty()
+            .append(Component.literal("<"))
+            .append(headComp)
+            .append(Component.literal("Porkyoot"))
+            .append(Component.literal("> "))
+            .append(Component.literal("J'ai trouve un spawner"))
+
+        val fakeResult = TranslationResult(
+            originalText = "J'ai trouve un spawner",
+            translatedText = "I found a spawner",
+            detectedLanguage = "fr",
+            targetLanguage = "en",
+            isSameLanguage = false,
+        )
+        TranslationService.putCache(fakeResult)
+
+        val result = ChatTranslationManager.processIncomingMessage(incoming)
+        result.string shouldContain "[T] "
+        result.string shouldContain "<[Porkyoot head]Porkyoot> "
+        result.string shouldContain "I found a spawner"
+    }
+
+    test("updateChatDisplayWithAccessor matches by plain text fallback") {
+        val orig = Component.literal("Unique original message")
+        val trans = Component.literal("Unique translated message")
+        val tracked = ChatTranslationManager.TrackedChatMessage(
+            id = 777L,
+            originalComponent = orig,
+            plainText = "Unique original message",
+            translatedComponent = trans,
+        )
+
+        val messageList = mutableListOf<net.minecraft.client.multiplayer.chat.GuiMessage>()
+        val dummyMsg = net.minecraft.client.multiplayer.chat.GuiMessage(
+            10,
+            Component.literal("Unique original message"),
+            null,
+            net.minecraft.client.multiplayer.chat.GuiMessageSource.SYSTEM_CLIENT,
+            null,
+        )
+        messageList.add(dummyMsg)
+
+        var refreshed = false
+        val fakeAccessor = object : com.stellar.lang.mixin.ChatComponentAccessor {
+            override fun stellarGetAllMessages(): MutableList<net.minecraft.client.multiplayer.chat.GuiMessage> =
+                messageList
+            override fun stellarRefreshTrimmedMessages() {
+                refreshed = true
+            }
+        }
+
+        ChatTranslationManager.updateChatDisplayWithAccessor(fakeAccessor, tracked)
+        refreshed shouldBe true
+        messageList[0].content() shouldBe trans
+    }
+
+    test("copyChatHeadsData copies head data between objects with matching methods") {
+        data class DummyHeadData(val id: String)
+        class SourceObj(val head: DummyHeadData?) {
+            fun `chatheads$getHeadData`(): DummyHeadData? = head
+        }
+        class TargetObj {
+            var head: DummyHeadData? = null
+            fun `chatheads$setHeadData`(data: DummyHeadData) {
+                head = data
+            }
+        }
+
+        val src = SourceObj(DummyHeadData("player123"))
+        val dst = TargetObj()
+        ChatTranslationManager.copyChatHeadsData(src, dst)
+        dst.head shouldBe DummyHeadData("player123")
+    }
+
+    test("copyChatHeadsData handles objects without chat heads methods gracefully") {
+        ChatTranslationManager.copyChatHeadsData("plain source", "plain target")
     }
 })
