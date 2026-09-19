@@ -825,4 +825,76 @@ class TranslationServiceSpec : FunSpec({
         config.translationPlugin.setValue("libretranslate", false)
         config.detectionPlugin.setValue("libretranslate", false)
     }
+
+    test("custom mock plugins handle null and exceptions in executeTranslation and executeBatchTranslation") {
+        val failingTranslator = object : com.stellar.lang.plugin.TranslationPlugin {
+            override val id = "failing_mock"
+            override val displayName = "Failing Mock"
+            override val description = "Mock"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready("Ready")
+            override suspend fun translate(text: String, sourceLang: String?, targetLang: String): String? {
+                if (text == "explode") error("Boom")
+                return null
+            }
+            override suspend fun translateBatch(
+                texts: List<String>,
+                sourceLang: String?,
+                targetLang: String,
+            ): List<String>? {
+                if (texts.contains("explode")) error("Boom batch")
+                return null
+            }
+        }
+
+        val mockDetector = object : com.stellar.lang.plugin.LanguageDetectorPlugin {
+            override val id = "detector_mock"
+            override val displayName = "Detector Mock"
+            override val description = "Mock"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready("Ready")
+            override suspend fun detectLanguage(text: String): String {
+                if (text == "detector_error") error("Detection error")
+                return "fr"
+            }
+        }
+
+        com.stellar.lang.plugin.PluginRegistry.registerTranslator(failingTranslator)
+        com.stellar.lang.plugin.PluginRegistry.registerDetector(mockDetector)
+
+        val config = TranslationService.getConfig()
+        config.translationPlugin.setValue("failing_mock", false)
+        config.detectionPlugin.setValue("detector_mock", false)
+        config.targetLanguage.setValue("es", false)
+
+        val latch = CountDownLatch(3)
+        var nullRes: TranslationResult? = null
+        var explodeRes: TranslationResult? = null
+        var detErrRes: TranslationResult? = null
+
+        TranslationService.translateAsync("return_null") { res ->
+            nullRes = res
+            latch.countDown()
+        }
+        TranslationService.translateAsync("explode") { res ->
+            explodeRes = res
+            latch.countDown()
+        }
+        TranslationService.translateAsync("detector_error") { res ->
+            detErrRes = res
+            latch.countDown()
+        }
+
+        latch.await(3, TimeUnit.SECONDS) shouldBe true
+        nullRes shouldBe null
+        explodeRes shouldBe null
+        detErrRes shouldBe null
+
+        val batchNull = TranslationService.translateBatchSync(listOf("return_null_batch"))
+        batchNull shouldBe null
+
+        val batchExplode = TranslationService.translateBatchSync(listOf("explode"))
+        batchExplode shouldBe null
+
+        config.translationPlugin.setValue("libretranslate", false)
+        config.detectionPlugin.setValue("libretranslate", false)
+    }
 })

@@ -28,9 +28,15 @@ import java.util.concurrent.ConcurrentHashMap
 object OnnxInferenceEngine : AutoCloseable {
     private val logger: Logger = LoggerFactory.getLogger("StellarLang-OnnxInference")
 
-    private val env: OrtEnvironment by lazy {
-        OrtEnvironment.getEnvironment()
-    }
+    @Volatile
+    private var env: OrtEnvironment? = null
+
+    @Volatile
+    private var envInitFailed: Boolean = false
+
+    @Volatile
+    var envInitErrorMessage: String? = null
+        private set
 
     @Volatile
     private var detectionSession: OrtSession? = null
@@ -67,6 +73,41 @@ object OnnxInferenceEngine : AutoCloseable {
         "ja",
     )
 
+    @Synchronized
+    fun getOrInitEnv(): OrtEnvironment? {
+        if (envInitFailed) return null
+        val existing = env
+        if (existing != null) return existing
+        return try {
+            val created = OrtEnvironment.getEnvironment()
+            env = created
+            created
+        } catch (ex: Throwable) {
+            envInitFailed = true
+            envInitErrorMessage = ex.message ?: ex.javaClass.simpleName
+            logger.warn("ONNX Runtime native environment could not be initialized: {}", envInitErrorMessage)
+            null
+        }
+    }
+
+    fun isEnvironmentAvailable(): Boolean = getOrInitEnv() != null
+
+    fun validateModel(modelFile: java.io.File): Boolean {
+        if (!modelFile.exists() || modelFile.length() < 100L) return false
+        val environment = getOrInitEnv() ?: return false
+        return try {
+            val opts = OrtSession.SessionOptions().apply {
+                setIntraOpNumThreads(1)
+            }
+            environment.createSession(modelFile.absolutePath, opts).use {
+                it.inputNames.isNotEmpty()
+            }
+        } catch (ex: Throwable) {
+            logger.warn("ONNX model validation failed for {}: {}", modelFile.name, ex.message)
+            false
+        }
+    }
+
     private fun getExecutionThreads(): Int {
         val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")
         return config?.onnxExecutionThreads?.value() ?: StellarLangConfig.DEFAULT_ONNX_THREADS
@@ -74,6 +115,7 @@ object OnnxInferenceEngine : AutoCloseable {
 
     @Synchronized
     private fun getOrCreateDetectionSession(): OrtSession? {
+        val environment = getOrInitEnv() ?: return null
         val modelFile = OnnxModelManager.getDetectionModelFile()
         if (!modelFile.exists() || modelFile.length() == 0L) {
             detectionSession?.close()
@@ -92,7 +134,7 @@ object OnnxInferenceEngine : AutoCloseable {
             val opts = OrtSession.SessionOptions().apply {
                 setIntraOpNumThreads(getExecutionThreads())
             }
-            env.createSession(modelFile.absolutePath, opts).also {
+            environment.createSession(modelFile.absolutePath, opts).also {
                 detectionSession = it
                 loadedDetectionModelPath = modelFile.absolutePath
                 logger.info("Initialized ONNX detection session from {}", modelFile.name)
@@ -104,6 +146,7 @@ object OnnxInferenceEngine : AutoCloseable {
 
     @Synchronized
     private fun getOrCreateTranslationSession(targetLang: String): OrtSession? {
+        val environment = getOrInitEnv() ?: return null
         val modelFile = OnnxModelManager.getTranslationModelFile(targetLang)
         if (!modelFile.exists() || modelFile.length() == 0L) {
             translationSessions.remove(targetLang)?.close()
@@ -122,7 +165,7 @@ object OnnxInferenceEngine : AutoCloseable {
             val opts = OrtSession.SessionOptions().apply {
                 setIntraOpNumThreads(getExecutionThreads())
             }
-            env.createSession(modelFile.absolutePath, opts).also {
+            environment.createSession(modelFile.absolutePath, opts).also {
                 translationSessions[targetLang] = it
                 loadedTranslationModelPaths[targetLang] = modelFile.absolutePath
                 logger.info("Initialized ONNX translation session for '{}'", targetLang)
@@ -136,6 +179,7 @@ object OnnxInferenceEngine : AutoCloseable {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return null
 
+        val environment = getOrInitEnv() ?: return null
         val session = getOrCreateDetectionSession() ?: return null
 
         return runCatching {
@@ -146,9 +190,9 @@ object OnnxInferenceEngine : AutoCloseable {
             val maskBuffer = LongBuffer.wrap(LongArray(tokens.size) { 1L })
             val typeBuffer = LongBuffer.wrap(LongArray(tokens.size) { 0L })
 
-            val inputTensor = OnnxTensor.createTensor(env, tokenBuffer, longArrayOf(1, seqLen))
-            val maskTensor = OnnxTensor.createTensor(env, maskBuffer, longArrayOf(1, seqLen))
-            val typeTensor = OnnxTensor.createTensor(env, typeBuffer, longArrayOf(1, seqLen))
+            val inputTensor = OnnxTensor.createTensor(environment, tokenBuffer, longArrayOf(1, seqLen))
+            val maskTensor = OnnxTensor.createTensor(environment, maskBuffer, longArrayOf(1, seqLen))
+            val typeTensor = OnnxTensor.createTensor(environment, typeBuffer, longArrayOf(1, seqLen))
 
             val inputs = mutableMapOf<String, OnnxTensor>(
                 "input_ids" to inputTensor,
@@ -190,13 +234,14 @@ object OnnxInferenceEngine : AutoCloseable {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return null
 
+        val environment = getOrInitEnv() ?: return null
         val session = getOrCreateTranslationSession(targetLang) ?: return null
 
         return runCatching {
             // Encode input sequence
             val tokens = simpleTokenize(trimmed, maxLen = 128)
             val tokenBuffer = LongBuffer.wrap(tokens)
-            val inputTensor = OnnxTensor.createTensor(env, tokenBuffer, longArrayOf(1, tokens.size.toLong()))
+            val inputTensor = OnnxTensor.createTensor(environment, tokenBuffer, longArrayOf(1, tokens.size.toLong()))
 
             val inputs = mapOf("input_ids" to inputTensor)
             val results = session.run(inputs)
@@ -234,7 +279,15 @@ object OnnxInferenceEngine : AutoCloseable {
         loadedTranslationModelPaths.clear()
     }
 
-    override fun close() {
+    internal fun resetEnvironment() {
         resetSessions()
+        runCatching { env?.close() }
+        env = null
+        envInitFailed = false
+        envInitErrorMessage = null
+    }
+
+    override fun close() {
+        resetEnvironment()
     }
 }

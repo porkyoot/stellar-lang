@@ -10,6 +10,13 @@ dependencies {
 
 tasks.named<Jar>("jar") {
     from(project(":stellar-core").the<SourceSetContainer>()["main"].output)
+    from(provider {
+        configurations.named("runtimeClasspath").get()
+            .filter { it.name.startsWith("onnxruntime") }
+            .map { zipTree(it) }
+    }) {
+        exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA")
+    }
 }
 
 tasks.named<JacocoReport>("jacocoTestReport") {

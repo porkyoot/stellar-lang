@@ -17,7 +17,10 @@ class StellarLangMod : ClientModInitializer {
         StellarCore.logInfo("Initializing Stellar Lang under namespace ${StellarCore.NAMESPACE}")
         logger.info("Initializing client mod Stellar Lang")
 
-        ConfigManager.register(MOD_ID, "main", StellarLangConfig::class.java)
+        val config = ConfigManager.register(MOD_ID, "main", StellarLangConfig::class.java)
+        if (config.onnxAutoDownload.value()) {
+            com.stellar.lang.plugin.onnx.OnnxModelManager.autoDownloadModelsInBackground()
+        }
     }
 
     companion object {

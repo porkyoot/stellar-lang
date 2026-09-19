@@ -19,6 +19,8 @@ class ChatTranslationManagerSpec : FunSpec({
         config.enabled.setValue(true, false)
         config.translateChat.setValue(true, false)
         config.targetLanguage.setValue("en", false)
+        config.translationPlugin.setValue("libretranslate", false)
+        config.detectionPlugin.setValue("libretranslate", false)
     }
 
     test("TrackedChatMessage state management and toggling") {

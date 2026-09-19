@@ -11,6 +11,7 @@ import com.stellar.core.config.ConfigManager
 import com.stellar.lang.StellarLangMod
 import com.stellar.lang.config.StellarLangConfig
 import com.stellar.lang.plugin.PluginRegistry
+import com.stellar.lang.plugin.PluginStatus
 import com.stellar.lang.plugin.libretranslate.LibreTranslatePlugin
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -142,7 +143,12 @@ object TranslationService {
             if (result != null) {
                 TranslationCache.put(result)
             } else {
-                TranslationCache.markFailed(key)
+                val transStatus = PluginRegistry.getActiveTranslator().getStatus()
+                val detStatus = PluginRegistry.getActiveDetector().getStatus()
+                val isDownloading = transStatus is PluginStatus.Downloading || detStatus is PluginStatus.Downloading
+                if (!isDownloading) {
+                    TranslationCache.markFailed(key)
+                }
             }
             TranslationCache.completeInFlight(key, result)
         }

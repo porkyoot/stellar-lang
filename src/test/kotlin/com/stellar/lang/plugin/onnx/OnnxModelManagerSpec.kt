@@ -210,4 +210,66 @@ class OnnxModelManagerSpec : FunSpec({
         failedResult?.isFailure shouldBe true
         OnnxModelManager.getDetectionStatus() shouldNotBe null
     }
+
+    test("OnnxModelManager httpClient override and cooldown expiration") {
+        val mockClient = java.net.http.HttpClient.newHttpClient()
+        OnnxModelManager.httpClientOverride = mockClient
+        OnnxModelManager.httpClient shouldBe mockClient
+        OnnxModelManager.httpClientOverride = null
+
+        val field = OnnxModelManager::class.java.getDeclaredField("failureCooldowns")
+        field.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val cooldowns = field.get(OnnxModelManager) as MutableMap<String, Long>
+
+        cooldowns["expired_test"] = System.currentTimeMillis() - 40_000L
+        OnnxModelManager.isInCooldown("expired_test") shouldBe false
+        cooldowns.containsKey("expired_test") shouldBe false
+
+        cooldowns["active_test"] = System.currentTimeMillis()
+        OnnxModelManager.isInCooldown("active_test") shouldBe true
+
+        cooldowns.clear()
+    }
+
+    test("download deduplication and cooldown skip for detection and translation") {
+        val field = OnnxModelManager::class.java.getDeclaredField("activeDownloads")
+        field.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val map = field.get(OnnxModelManager) as MutableMap<String, OnnxModelManager.DownloadState>
+
+        map["detection"] = OnnxModelManager.DownloadState("detection", 50, true, null)
+        var called = false
+        OnnxModelManager.downloadDetectionModelAsync(onComplete = { called = true })
+        called shouldBe false
+
+        map["translation-de"] = OnnxModelManager.DownloadState("translation-de", 50, true, null)
+        called = false
+        OnnxModelManager.downloadTranslationModelAsync("de", onComplete = { called = true })
+        called shouldBe false
+
+        map.clear()
+
+        val cooldownField = OnnxModelManager::class.java.getDeclaredField("failureCooldowns")
+        cooldownField.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val cooldowns = cooldownField.get(OnnxModelManager) as MutableMap<String, Long>
+        cooldowns["translation-fr"] = System.currentTimeMillis()
+
+        called = false
+        OnnxModelManager.downloadTranslationModelAsync("fr", forceRetry = false, onComplete = { called = true })
+        called shouldBe false
+        cooldowns.clear()
+    }
+
+    test("autoDownloadModelsInBackground with auto or blank targetLanguage") {
+        val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")!!
+        config.onnxAutoDownload.setValue(true, false)
+
+        config.targetLanguage.setValue("auto", false)
+        OnnxModelManager.autoDownloadModelsInBackground()
+
+        config.targetLanguage.setValue("  ", false)
+        OnnxModelManager.autoDownloadModelsInBackground()
+    }
 })

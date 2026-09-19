@@ -7,6 +7,8 @@
     "CyclomaticComplexMethod",
     "CognitiveComplexMethod",
     "StringLiteralDuplication",
+    "LargeClass",
+    "TooManyFunctions",
 )
 
 package com.stellar.lang.plugin.onnx
@@ -31,17 +33,28 @@ import java.util.concurrent.Executors
  * Manages downloading, verification, and storage of ONNX models.
  */
 object OnnxModelManager {
+    const val RETRY_COOLDOWN_MS: Long = 30_000L
+    const val MIN_MODEL_SIZE_BYTES: Long = 1L
+    private const val MIN_VALIDATION_SIZE_BYTES: Long = 10_000L
     private const val DEFAULT_BUFFER_SIZE = 8192
+    private const val HTML_PROBE_LENGTH = 128
+    private const val HTTP_PARTIAL_CONTENT = 206
+    private const val HTTP_RANGE_NOT_SATISFIABLE = 416
 
     private val logger: Logger = LoggerFactory.getLogger("StellarLang-OnnxModelManager")
     private val downloadExecutor = Executors.newFixedThreadPool(2) { runnable ->
         Thread(runnable, "StellarLang-ModelDownloader").apply { isDaemon = true }
     }
 
-    private val httpClient = HttpClient.newBuilder()
+    private val defaultHttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
         .followRedirects(HttpClient.Redirect.NORMAL)
         .build()
+
+    internal var httpClientOverride: HttpClient? = null
+
+    val httpClient: HttpClient
+        get() = httpClientOverride ?: defaultHttpClient
 
     // Model URLs
     const val DETECTION_MODEL_URL =
@@ -51,9 +64,22 @@ object OnnxModelManager {
 
     // Download state tracking
     private val activeDownloads = ConcurrentHashMap<String, DownloadState>()
+    private val failureCooldowns = ConcurrentHashMap<String, Long>()
 
     fun reset() {
         activeDownloads.clear()
+        failureCooldowns.clear()
+        httpClientOverride = null
+    }
+
+    fun isInCooldown(key: String): Boolean {
+        val lastFail = failureCooldowns[key] ?: return false
+        val elapsed = System.currentTimeMillis() - lastFail
+        if (elapsed < RETRY_COOLDOWN_MS) {
+            return true
+        }
+        failureCooldowns.remove(key)
+        return false
     }
 
     data class DownloadState(
@@ -93,12 +119,26 @@ object OnnxModelManager {
 
     fun isDetectionModelReady(): Boolean {
         val model = getDetectionModelFile()
-        return model.exists() && model.length() > 0
+        return model.exists() && model.length() >= MIN_MODEL_SIZE_BYTES
     }
 
     fun isTranslationModelReady(targetLang: String): Boolean {
         val model = getTranslationModelFile(targetLang)
-        return model.exists() && model.length() > 0
+        return model.exists() && model.length() >= MIN_MODEL_SIZE_BYTES
+    }
+
+    fun autoDownloadModelsInBackground() {
+        val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main") ?: return
+        if (!config.onnxAutoDownload.value()) return
+
+        if (!isDetectionModelReady()) {
+            downloadDetectionModelAsync()
+        }
+        val target = config.targetLanguage.value().trim().lowercase()
+        if (target.isEmpty() || target == "auto") return
+        if (!isTranslationModelReady(target)) {
+            downloadTranslationModelAsync(target)
+        }
     }
 
     fun getDetectionStatus(): PluginStatus {
@@ -135,70 +175,106 @@ object OnnxModelManager {
     fun downloadDetectionModelAsync(
         modelUrl: String? = null,
         vocabUrl: String? = null,
+        forceRetry: Boolean = false,
         onProgress: ((Int) -> Unit)? = null,
         onComplete: ((Result<File>) -> Unit)? = null,
     ) {
         val key = "detection"
-        val state = DownloadState(key)
-        activeDownloads[key] = state
-
-        downloadExecutor.execute {
-            val destination = getDetectionModelFile()
-            val url = modelUrl ?: DETECTION_MODEL_URL
-            val result = runCatching {
-                downloadFileWithProgress(url, destination) { progress ->
-                    state.progressPercent = progress
-                    onProgress?.invoke(progress)
-                }
-                // Also fetch vocab if missing
-                val vocabDest = getDetectionVocabFile()
-                if (!vocabDest.exists()) {
-                    val vUrl = vocabUrl ?: DETECTION_VOCAB_URL
-                    runCatching { downloadFileWithProgress(vUrl, vocabDest) {} }
-                }
-                state.isDownloading = false
-                state.progressPercent = 100
-                destination
-            }.onFailure { ex ->
-                state.isDownloading = false
-                state.errorMessage = ex.message ?: "Failed to download model"
-                logger.error("Failed to download detection model: {}", ex.message)
+        synchronized(activeDownloads) {
+            val existing = activeDownloads[key]
+            if (existing != null && existing.isDownloading) {
+                return
             }
-            onComplete?.invoke(result)
+            if (!forceRetry && isInCooldown(key)) {
+                logger.debug("Download for '{}' skipped due to cooldown", key)
+                return
+            }
+            val state = DownloadState(key)
+            activeDownloads[key] = state
+
+            downloadExecutor.execute {
+                val destination = getDetectionModelFile()
+                val url = modelUrl ?: DETECTION_MODEL_URL
+                val result = runCatching {
+                    downloadFileWithProgress(url, destination) { progress ->
+                        state.progressPercent = progress
+                        onProgress?.invoke(progress)
+                    }
+                    val vocabDest = getDetectionVocabFile()
+                    if (!vocabDest.exists()) {
+                        val vUrl = vocabUrl ?: DETECTION_VOCAB_URL
+                        runCatching { downloadFileWithProgress(vUrl, vocabDest) {} }
+                    }
+                    state.isDownloading = false
+                    state.progressPercent = 100
+                    failureCooldowns.remove(key)
+                    onDownloadCompleted()
+                    destination
+                }.onFailure { ex ->
+                    state.isDownloading = false
+                    state.errorMessage = ex.message ?: "Failed to download model"
+                    failureCooldowns[key] = System.currentTimeMillis()
+                    logger.error("Failed to download detection model: {}", ex.message)
+                }
+                onComplete?.invoke(result)
+            }
         }
     }
 
     fun downloadTranslationModelAsync(
         targetLang: String,
         modelUrl: String? = null,
+        forceRetry: Boolean = false,
         onProgress: ((Int) -> Unit)? = null,
         onComplete: ((Result<File>) -> Unit)? = null,
     ) {
         val key = "translation-$targetLang"
-        val state = DownloadState(key)
-        activeDownloads[key] = state
-
-        downloadExecutor.execute {
-            val destination = getTranslationModelFile(targetLang)
-            val url = modelUrl
-                ?: "https://huggingface.co/onnx-community/opus-mt-mul-en/resolve/main/onnx/model_quantized.onnx"
-            val result = runCatching {
-                downloadFileWithProgress(url, destination) { progress ->
-                    state.progressPercent = progress
-                    onProgress?.invoke(progress)
-                }
-                state.isDownloading = false
-                state.progressPercent = 100
-                destination
-            }.onFailure { ex ->
-                state.isDownloading = false
-                state.errorMessage = ex.message ?: "Failed to download translation model"
-                logger.error("Failed to download translation model for {}: {}", targetLang, ex.message)
+        synchronized(activeDownloads) {
+            val existing = activeDownloads[key]
+            if (existing != null && existing.isDownloading) {
+                return
             }
-            onComplete?.invoke(result)
+            if (!forceRetry && isInCooldown(key)) {
+                logger.debug("Download for '{}' skipped due to cooldown", key)
+                return
+            }
+            val state = DownloadState(key)
+            activeDownloads[key] = state
+
+            downloadExecutor.execute {
+                val destination = getTranslationModelFile(targetLang)
+                val url = modelUrl
+                    ?: "https://huggingface.co/onnx-community/opus-mt-mul-en/resolve/main/onnx/model_quantized.onnx"
+                val result = runCatching {
+                    downloadFileWithProgress(url, destination) { progress ->
+                        state.progressPercent = progress
+                        onProgress?.invoke(progress)
+                    }
+                    state.isDownloading = false
+                    state.progressPercent = 100
+                    failureCooldowns.remove(key)
+                    onDownloadCompleted()
+                    destination
+                }.onFailure { ex ->
+                    state.isDownloading = false
+                    state.errorMessage = ex.message ?: "Failed to download translation model"
+                    failureCooldowns[key] = System.currentTimeMillis()
+                    logger.error("Failed to download translation model for {}: {}", targetLang, ex.message)
+                }
+                onComplete?.invoke(result)
+            }
         }
     }
 
+    private fun onDownloadCompleted() {
+        OnnxInferenceEngine.resetSessions()
+        runCatching {
+            com.stellar.lang.service.TranslationCache.clear()
+            com.stellar.lang.sign.SignTranslationManager.clearCache()
+        }
+    }
+
+    @Suppress("ThrowsCount")
     private fun downloadFileWithProgress(
         urlStr: String,
         targetFile: File,
@@ -206,30 +282,32 @@ object OnnxModelManager {
     ) {
         val tempFile = File(targetFile.parentFile, "${targetFile.name}.tmp")
         try {
-            val request = HttpRequest.newBuilder()
-                .uri(URI.create(urlStr))
-                .timeout(Duration.ofSeconds(30))
-                .GET()
-                .build()
+            var response = executeDownloadRequest(urlStr, tempFile)
+            if (response.statusCode() == HTTP_RANGE_NOT_SATISFIABLE) {
+                if (tempFile.exists()) tempFile.delete()
+                response = executeDownloadRequest(urlStr, tempFile)
+            }
 
-            val response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream())
             val statusCode = response.statusCode()
             if (statusCode !in 200..299) {
                 error("HTTP error $statusCode while downloading from $urlStr")
             }
 
-            val contentLength = response.headers().firstValueAsLong("Content-Length").orElse(-1L)
-            var totalBytesRead = 0L
+            val isPartial = statusCode == HTTP_PARTIAL_CONTENT
+            val initialBytes = if (isPartial && tempFile.exists()) tempFile.length() else 0L
+            val serverContentLength = response.headers().firstValueAsLong("Content-Length").orElse(-1L)
+            val totalExpected = if (serverContentLength > 0) initialBytes + serverContentLength else -1L
 
+            var totalBytesRead = initialBytes
             response.body().use { input ->
-                FileOutputStream(tempFile).use { output ->
+                FileOutputStream(tempFile, isPartial).use { output ->
                     val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
                     var bytesRead = input.read(buffer)
                     while (bytesRead != -1) {
                         output.write(buffer, 0, bytesRead)
                         totalBytesRead += bytesRead
-                        if (contentLength > 0) {
-                            val percent = (totalBytesRead * 100 / contentLength).toInt().coerceIn(0, 99)
+                        if (totalExpected > 0) {
+                            val percent = (totalBytesRead * 100 / totalExpected).toInt().coerceIn(0, 99)
                             progressCallback(percent)
                         }
                         bytesRead = input.read(buffer)
@@ -237,15 +315,69 @@ object OnnxModelManager {
                 }
             }
 
-            java.nio.file.Files.move(
-                tempFile.toPath(),
-                targetFile.toPath(),
-                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-            )
+            verifyAndPromoteFile(tempFile, targetFile)
             progressCallback(100)
         } catch (ex: Exception) {
-            if (tempFile.exists()) tempFile.delete()
+            // Keep partial file for range resume unless it is an invalid/corrupted format
+            if (tempFile.exists() && isHtmlOrInvalid(tempFile)) {
+                tempFile.delete()
+            }
             throw ex
         }
+    }
+
+    private fun executeDownloadRequest(urlStr: String, tempFile: File): HttpResponse<java.io.InputStream> {
+        val requestBuilder = HttpRequest.newBuilder()
+            .uri(URI.create(urlStr))
+            .timeout(Duration.ofSeconds(30))
+            .GET()
+
+        if (tempFile.exists() && tempFile.length() > 0) {
+            requestBuilder.header("Range", "bytes=${tempFile.length()}-")
+        }
+
+        return httpClient.send(requestBuilder.build(), HttpResponse.BodyHandlers.ofInputStream())
+    }
+
+    private fun isHtmlOrInvalid(file: File): Boolean {
+        if (!file.exists() || file.length() == 0L) return true
+        return try {
+            val probeBytes = ByteArray(HTML_PROBE_LENGTH)
+            val read = file.inputStream().use { it.read(probeBytes) }
+            if (read > 0) {
+                val header = String(probeBytes, 0, read, Charsets.UTF_8).lowercase()
+                header.contains("<!doctype") || header.contains("<html")
+            } else {
+                true
+            }
+        } catch (ex: Exception) {
+            logger.trace("Failed to probe file for HTML headers", ex)
+            false
+        }
+    }
+
+    private fun isInvalidOnnxModel(file: File): Boolean {
+        if (file.length() < MIN_VALIDATION_SIZE_BYTES) return false
+        return OnnxInferenceEngine.isEnvironmentAvailable() && !OnnxInferenceEngine.validateModel(file)
+    }
+
+    private fun verifyAndPromoteFile(tempFile: File, targetFile: File) {
+        if (!tempFile.exists() || tempFile.length() < MIN_MODEL_SIZE_BYTES) {
+            if (tempFile.exists()) tempFile.delete()
+            error("Downloaded file is empty")
+        }
+        if (isHtmlOrInvalid(tempFile)) {
+            tempFile.delete()
+            error("Downloaded payload is an HTML document or invalid error response")
+        }
+        if (targetFile.name.endsWith(".onnx") && isInvalidOnnxModel(tempFile)) {
+            tempFile.delete()
+            error("ONNX model validation failed for downloaded file")
+        }
+        java.nio.file.Files.move(
+            tempFile.toPath(),
+            targetFile.toPath(),
+            java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+        )
     }
 }

@@ -35,9 +35,24 @@ object PluginRegistry {
         translationPlugins[plugin.id.lowercase()] = plugin
     }
 
-    fun getDetector(id: String): LanguageDetectorPlugin? = detectorPlugins[id.lowercase()]
+    internal fun normalizePluginId(rawId: String): String {
+        val lower = rawId.trim().lowercase()
+        return when {
+            lower.contains("onnx") || lower.contains("local") -> "onnx"
+            lower.contains("libre") -> "libretranslate"
+            else -> lower
+        }
+    }
 
-    fun getTranslator(id: String): TranslationPlugin? = translationPlugins[id.lowercase()]
+    fun getDetector(id: String): LanguageDetectorPlugin? {
+        val norm = normalizePluginId(id)
+        return detectorPlugins[norm] ?: detectorPlugins[id.lowercase()]
+    }
+
+    fun getTranslator(id: String): TranslationPlugin? {
+        val norm = normalizePluginId(id)
+        return translationPlugins[norm] ?: translationPlugins[id.lowercase()]
+    }
 
     fun getAllDetectors(): List<LanguageDetectorPlugin> = detectorPlugins.values.toList()
 
@@ -45,7 +60,7 @@ object PluginRegistry {
 
     fun getActiveDetector(): LanguageDetectorPlugin {
         val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")
-        val preferred = config?.detectionPlugin?.value()?.trim()?.lowercase() ?: "onnx"
+        val preferred = normalizePluginId(config?.detectionPlugin?.value() ?: "onnx")
         return detectorPlugins[preferred]
             ?: detectorPlugins["onnx"]
             ?: detectorPlugins.values.firstOrNull()
@@ -54,7 +69,7 @@ object PluginRegistry {
 
     fun getActiveTranslator(): TranslationPlugin {
         val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")
-        val preferred = config?.translationPlugin?.value()?.trim()?.lowercase() ?: "onnx"
+        val preferred = normalizePluginId(config?.translationPlugin?.value() ?: "onnx")
         return translationPlugins[preferred]
             ?: translationPlugins["onnx"]
             ?: translationPlugins.values.firstOrNull()

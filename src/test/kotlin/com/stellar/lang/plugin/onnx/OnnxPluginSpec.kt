@@ -41,10 +41,16 @@ class OnnxPluginSpec : FunSpec({
         val detector = OnnxLanguageDetectorPlugin()
         val detected = detector.detectLanguage("Hello world")
         detected shouldBe "en"
+        // Second call exercises session caching hit
+        val cachedDetect = detector.detectLanguage("Hello world 2")
+        cachedDetect shouldBe "en"
 
         val translator = OnnxTranslationPlugin()
         val translated = translator.translate("Hello world", "en", "es")
         translated shouldBe "Hello world"
+        // Second call exercises session caching hit
+        val cachedTrans = translator.translate("Hello world 2", "en", "es")
+        cachedTrans shouldBe "Hello world 2"
 
         val batch = translator.translateBatch(listOf("Hello", "World"), "en", "es")
         batch shouldBe listOf("Hello", "World")
@@ -81,6 +87,8 @@ class OnnxPluginSpec : FunSpec({
 
         OnnxInferenceEngine.detectLanguage("") shouldBe null
         OnnxInferenceEngine.translate("", null, "en") shouldBe null
+        OnnxInferenceEngine.envInitErrorMessage shouldBe null
+        OnnxInferenceEngine.getOrInitEnv() shouldNotBe null
 
         OnnxInferenceEngine.close()
     }
@@ -104,5 +112,50 @@ class OnnxPluginSpec : FunSpec({
 
         tempDir.deleteRecursively()
         OnnxInferenceEngine.resetSessions()
+    }
+
+    test("OnnxInferenceEngine environment availability, model validation, and reset") {
+        OnnxInferenceEngine.isEnvironmentAvailable() shouldBe true
+
+        val validModel = java.io.File("src/test/resources/test_models/detection/model.onnx")
+        OnnxInferenceEngine.validateModel(validModel) shouldBe true
+
+        val missingModel = java.io.File("build/non_existent.onnx")
+        OnnxInferenceEngine.validateModel(missingModel) shouldBe false
+
+        val smallCorrupt = java.io.File("build/small_corrupt.onnx").apply { writeText("bad") }
+        OnnxInferenceEngine.validateModel(smallCorrupt) shouldBe false
+        smallCorrupt.delete()
+
+        OnnxInferenceEngine.resetEnvironment()
+        OnnxInferenceEngine.isEnvironmentAvailable() shouldBe true
+    }
+
+    test("PluginRegistry normalizePluginId and active plugin resolution") {
+        com.stellar.lang.plugin.PluginRegistry.normalizePluginId("ONNX") shouldBe "onnx"
+        com.stellar.lang.plugin.PluginRegistry.normalizePluginId("onnx runtime (local offline)") shouldBe "onnx"
+        com.stellar.lang.plugin.PluginRegistry.normalizePluginId("LibreTranslate") shouldBe "libretranslate"
+        com.stellar.lang.plugin.PluginRegistry.normalizePluginId("custom_plugin") shouldBe "custom_plugin"
+
+        val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")!!
+        config.translationPlugin.setValue("onnx runtime (local offline)", false)
+        config.detectionPlugin.setValue("onnx runtime (local offline)", false)
+
+        com.stellar.lang.plugin.PluginRegistry.getActiveTranslator().id shouldBe "onnx"
+        com.stellar.lang.plugin.PluginRegistry.getActiveDetector().id shouldBe "onnx"
+    }
+
+    test("Onnx plugins trigger auto download when models are missing and autoDownload is enabled") {
+        val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")!!
+        config.onnxAutoDownload.setValue(true, false)
+        config.onnxModelDir.setValue("build/missing_models_${System.nanoTime()}", false)
+
+        val detector = OnnxLanguageDetectorPlugin()
+        detector.detectLanguage("Bonjour le monde") shouldBe null
+
+        val translator = OnnxTranslationPlugin()
+        translator.translate("Bonjour le monde", "fr", "en") shouldBe null
+
+        OnnxModelManager.reset()
     }
 })
