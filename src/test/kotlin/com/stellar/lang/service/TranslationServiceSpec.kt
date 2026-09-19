@@ -43,6 +43,8 @@ class TranslationServiceSpec : FunSpec({
         responseBody = """{"translatedText": "Hola", "detectedLanguage": "en"}"""
         val config = TranslationService.getConfig()
         config.enabled.setValue(true, false)
+        config.translationPlugin.setValue("libretranslate", false)
+        config.detectionPlugin.setValue("libretranslate", false)
         config.apiHost.setValue("http://127.0.0.1:$serverPort", false)
         config.apiKey.setValue("test_api_key", false)
         config.targetLanguage.setValue("es", false)
@@ -575,5 +577,171 @@ class TranslationServiceSpec : FunSpec({
         TranslationService.languageProvider = null
         val inferred = TranslationService.inferTargetLanguage()
         (inferred.length in 2..3) shouldBe true
+    }
+
+    test("TranslationService delegates to custom plugins and handles same-language") {
+        val customDetector = object : com.stellar.lang.plugin.LanguageDetectorPlugin {
+            override val id = "mock_det"
+            override val displayName = "Mock Det"
+            override val description = "Mock"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready()
+            override suspend fun detectLanguage(text: String): String = if (text.contains("Same")) "es" else "fr"
+        }
+
+        val customTranslator = object : com.stellar.lang.plugin.TranslationPlugin {
+            override val id = "mock_trans"
+            override val displayName = "Mock Trans"
+            override val description = "Mock"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready()
+            override suspend fun translate(text: String, sourceLang: String?, targetLang: String): String? {
+                return if (text == "ErrorMe") null else "Mocked-$text"
+            }
+        }
+
+        com.stellar.lang.plugin.PluginRegistry.registerDetector(customDetector)
+        com.stellar.lang.plugin.PluginRegistry.registerTranslator(customTranslator)
+
+        val config = TranslationService.getConfig()
+        config.detectionPlugin.setValue("mock_det", false)
+        config.translationPlugin.setValue("mock_trans", false)
+        config.targetLanguage.setValue("es", false)
+
+        // 1. Same language test
+        val sameLatch = CountDownLatch(1)
+        var sameResult: TranslationResult? = null
+        TranslationService.translateAsync("SameText") { r ->
+            sameResult = r
+            sameLatch.countDown()
+        }
+        sameLatch.await(3, TimeUnit.SECONDS) shouldBe true
+        sameResult shouldNotBe null
+        sameResult?.isSameLanguage shouldBe true
+        sameResult?.translatedText shouldBe "SameText"
+
+        // 2. Translated test
+        val transLatch = CountDownLatch(1)
+        var transResult: TranslationResult? = null
+        TranslationService.translateAsync("DifferentText") { r ->
+            transResult = r
+            transLatch.countDown()
+        }
+        transLatch.await(3, TimeUnit.SECONDS) shouldBe true
+        transResult shouldNotBe null
+        transResult?.isSameLanguage shouldBe false
+        transResult?.translatedText shouldBe "Mocked-DifferentText"
+
+        // 3. Translation error returns null
+        val errLatch = CountDownLatch(1)
+        var errResult: TranslationResult? = TranslationResult("dummy", "dummy", "en", "es", false)
+        TranslationService.translateAsync("ErrorMe") { r ->
+            errResult = r
+            errLatch.countDown()
+        }
+        errLatch.await(3, TimeUnit.SECONDS) shouldBe true
+        errResult shouldBe null
+
+        // 4. Batch translation with same language
+        val batchSame = TranslationService.translateBatchSync(listOf("Same1", "Same2"))
+        batchSame shouldNotBe null
+        batchSame!!.all { it.isSameLanguage } shouldBe true
+
+        // 5. Batch translation with foreign language
+        val batchTrans = TranslationService.translateBatchSync(listOf("ItemA", "ItemB"))
+        batchTrans shouldNotBe null
+        batchTrans!!.size shouldBe 2
+        batchTrans[0].translatedText shouldBe "Mocked-ItemA"
+        batchTrans[1].translatedText shouldBe "Mocked-ItemB"
+
+        // 6. Detector returns null or throws
+        val throwingDetector = object : com.stellar.lang.plugin.LanguageDetectorPlugin {
+            override val id = "throw_det"
+            override val displayName = "Throwing"
+            override val description = "Throw"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready()
+            override suspend fun detectLanguage(text: String): String? {
+                if (text == "Throw") error("Det failed")
+                return null
+            }
+        }
+        com.stellar.lang.plugin.PluginRegistry.registerDetector(throwingDetector)
+        config.detectionPlugin.setValue("throw_det", false)
+
+        val nullLatch = CountDownLatch(1)
+        var nullDetResult: TranslationResult? = null
+        TranslationService.translateAsync("NullDet") { r ->
+            nullDetResult = r
+            nullLatch.countDown()
+        }
+        nullLatch.await(3, TimeUnit.SECONDS)
+        nullDetResult shouldNotBe null
+        nullDetResult?.detectedLanguage shouldBe "unknown"
+
+        val throwLatch = CountDownLatch(1)
+        var throwDetResult: TranslationResult? = TranslationResult("d", "d", "d", "d", false)
+        TranslationService.translateAsync("Throw") { r ->
+            throwDetResult = r
+            throwLatch.countDown()
+        }
+        throwLatch.await(3, TimeUnit.SECONDS)
+        throwDetResult shouldBe null
+
+        // 7. Batch translation when translator returns null or throws
+        val failingBatchTranslator = object : com.stellar.lang.plugin.TranslationPlugin {
+            override val id = "fail_batch"
+            override val displayName = "Fail Batch"
+            override val description = "Fail"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready()
+            override suspend fun translate(text: String, sourceLang: String?, targetLang: String): String? = null
+            override suspend fun translateBatch(
+                texts: List<String>,
+                sourceLang: String?,
+                targetLang: String,
+            ): List<String>? {
+                if (texts.contains("ThrowBatch")) error("Batch exploded")
+                return null
+            }
+        }
+        com.stellar.lang.plugin.PluginRegistry.registerTranslator(failingBatchTranslator)
+        config.translationPlugin.setValue("fail_batch", false)
+
+        TranslationService.translateBatchSync(listOf("Fail1", "Fail2")) shouldBe null
+        TranslationService.translateBatchSync(listOf("ThrowBatch")) shouldBe null
+    }
+
+    test("testConnection with default arguments and normalizeLanguageCode branches") {
+        TranslationService.normalizeLanguageCode("lol_us") shouldBe "en"
+        TranslationService.normalizeLanguageCode("toolongcode") shouldBe "en"
+        TranslationService.normalizeLanguageCode("x") shouldBe "en"
+        TranslationService.normalizeLanguageCode("   ") shouldBe "en"
+        TranslationService.normalizeLanguageCode(null) shouldBe "en"
+
+        TranslationService.languageProvider shouldBe null
+
+        responseCode.set(200)
+        val defaultLatch = CountDownLatch(1)
+        var connectionSuccess = false
+        TranslationService.testConnection(
+            host = "http://127.0.0.1:$serverPort",
+            apiKey = "",
+        ) { res ->
+            connectionSuccess = res.isSuccess
+            defaultLatch.countDown()
+        }
+        defaultLatch.await(3, TimeUnit.SECONDS) shouldBe true
+        connectionSuccess shouldBe true
+
+        // Test connection failure branch
+        responseCode.set(500)
+        val failLatch = CountDownLatch(1)
+        var connectionFailure = false
+        TranslationService.testConnection(
+            host = "http://127.0.0.1:$serverPort",
+            apiKey = "",
+        ) { res ->
+            connectionFailure = res.isFailure
+            failLatch.countDown()
+        }
+        failLatch.await(3, TimeUnit.SECONDS) shouldBe true
+        connectionFailure shouldBe true
     }
 })

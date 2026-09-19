@@ -15,12 +15,26 @@ class StellarLangConfigSpec : FunSpec({
         config.apiHost.value() shouldBe "https://libretranslate.com"
         config.apiKey.value() shouldBe ""
         config.targetLanguage.value() shouldBe "auto"
+        config.translationPlugin.value() shouldBe "onnx"
+        config.detectionPlugin.value() shouldBe "onnx"
+        config.onnxModelDir.value() shouldBe "config/stellar_lang/models"
+        config.onnxAutoDownload.value() shouldBe true
+        config.onnxExecutionThreads.value() shouldBe StellarLangConfig.DEFAULT_ONNX_THREADS
         config.translateChat.value() shouldBe true
         config.translateSigns.value() shouldBe true
         config.translateBooks.value() shouldBe true
         config.translateEntities.value() shouldBe true
         config.translateItems.value() shouldBe true
         config.showOriginalKey.value() shouldBe Key.KEY_COMMA
+
+        config.translationPlugin.setValue("libretranslate", true)
+        config.translationPlugin.value() shouldBe "libretranslate"
+
+        config.detectionPlugin.setValue("libretranslate", true)
+        config.detectionPlugin.value() shouldBe "libretranslate"
+
+        config.onnxExecutionThreads.setValue(4, true)
+        config.onnxExecutionThreads.value() shouldBe 4
 
         config.enabled.setValue(false, true)
         config.enabled.value() shouldBe false

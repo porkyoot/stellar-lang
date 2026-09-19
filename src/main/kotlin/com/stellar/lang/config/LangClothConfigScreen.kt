@@ -1,3 +1,9 @@
+@file:Suppress(
+    "LargeClass",
+    "LongMethod",
+    "StringLiteralDuplication",
+)
+
 package com.stellar.lang.config
 
 import com.stellar.core.config.ConfigManager
@@ -12,7 +18,6 @@ import net.minecraft.network.chat.Component
 /**
  * Factory for creating the Cloth Config GUI screen bound to StellarLangConfig.
  */
-@Suppress("LargeClass")
 object LangClothConfigScreen {
     private val testToastId by lazy {
         runCatching { net.minecraft.client.gui.components.toasts.SystemToast.SystemToastId() }.getOrNull()
@@ -35,7 +40,7 @@ object LangClothConfigScreen {
 
         val entryBuilder = builder.entryBuilder()
         buildGeneralCategory(builder, entryBuilder, config)
-        buildApiCategory(builder, entryBuilder, config)
+        buildProvidersCategory(builder, entryBuilder, config)
         buildFeaturesCategory(builder, entryBuilder, config)
         buildControlsCategory(builder, entryBuilder, config)
         buildCacheCategory(builder, entryBuilder, config)
@@ -69,9 +74,166 @@ object LangClothConfigScreen {
         category.addEntry(targetLang)
     }
 
-    private fun buildApiCategory(builder: ConfigBuilder, entries: ConfigEntryBuilder, config: StellarLangConfig) {
-        val category = builder.getOrCreateCategory(Component.literal("API & Keys"))
+    @Suppress("LongMethod")
+    private fun buildProvidersCategory(
+        builder: ConfigBuilder,
+        entries: ConfigEntryBuilder,
+        config: StellarLangConfig,
+    ) {
+        val category = builder.getOrCreateCategory(Component.literal("Providers & Models"))
 
+        var selectedTranslator = config.translationPlugin.value().trim().lowercase()
+        var selectedDetector = config.detectionPlugin.value().trim().lowercase()
+
+        val providerOptions = listOf("onnx", "libretranslate")
+        val nameMap = mapOf(
+            "onnx" to "ONNX Runtime (Local Offline)",
+            "libretranslate" to "LibreTranslate (HTTP API)",
+        )
+
+        val onnxSubBuilder = entries.startSubCategory(Component.literal("ONNX Runtime (Local Offline) Settings"))
+        val libreSubBuilder = entries.startSubCategory(Component.literal("LibreTranslate (HTTP API) Settings"))
+
+        buildOnnxSubCategory(onnxSubBuilder, entries, config)
+        buildLibreSubCategory(libreSubBuilder, entries, config)
+
+        val onnxSubCategory = onnxSubBuilder.build()
+        val libreSubCategory = libreSubBuilder.build()
+
+        fun updateSubCategoryVisibility() {
+            val needsOnnx = selectedTranslator == "onnx" || selectedDetector == "onnx"
+            val needsLibre = selectedTranslator == "libretranslate" || selectedDetector == "libretranslate"
+            onnxSubCategory.setExpanded(needsOnnx)
+            libreSubCategory.setExpanded(needsLibre)
+        }
+
+        val transDropdown = entries
+            .startStringDropdownMenu(
+                Component.literal("Translation Provider"),
+                selectedTranslator,
+                { id -> Component.literal(nameMap[id] ?: id) },
+            )
+            .setSelections(providerOptions)
+            .setDefaultValue("onnx")
+            .setTooltip(Component.literal("Plugin used to translate text into target language"))
+            .setErrorSupplier { typed ->
+                val clean = typed.trim().lowercase()
+                if (clean in providerOptions) {
+                    selectedTranslator = clean
+                    updateSubCategoryVisibility()
+                }
+                java.util.Optional.empty()
+            }
+            .setSaveConsumer { value -> config.translationPlugin.setValue(value.trim().lowercase(), true) }
+            .build()
+
+        val detectDropdown = entries
+            .startStringDropdownMenu(
+                Component.literal("Language Detection Provider"),
+                selectedDetector,
+                { id -> Component.literal(nameMap[id] ?: id) },
+            )
+            .setSelections(providerOptions)
+            .setDefaultValue("onnx")
+            .setTooltip(Component.literal("Plugin used to detect the source language of in-game text"))
+            .setErrorSupplier { typed ->
+                val clean = typed.trim().lowercase()
+                if (clean in providerOptions) {
+                    selectedDetector = clean
+                    updateSubCategoryVisibility()
+                }
+                java.util.Optional.empty()
+            }
+            .setSaveConsumer { value -> config.detectionPlugin.setValue(value.trim().lowercase(), true) }
+            .build()
+
+        updateSubCategoryVisibility()
+
+        category.addEntry(transDropdown)
+        category.addEntry(detectDropdown)
+        category.addEntry(onnxSubCategory)
+        category.addEntry(libreSubCategory)
+    }
+
+    private fun buildOnnxSubCategory(
+        subCategory: me.shedaniel.clothconfig2.impl.builders.SubCategoryBuilder,
+        entries: ConfigEntryBuilder,
+        config: StellarLangConfig,
+    ) {
+        val modelManager = com.stellar.lang.plugin.onnx.OnnxModelManager
+        val statusText = modelManager.getDetectionStatus().displayText()
+
+        val statusDescription = entries
+            .startTextDescription(Component.literal("Status: $statusText"))
+            .build()
+
+        var downloadTriggered = false
+        var downloadStatus = "Download Language Models (HuggingFace)"
+        val downloadButton = entries
+            .startBooleanToggle(Component.literal("Model Downloader"), false)
+            .setYesNoTextSupplier { boolVal ->
+                if (boolVal && !downloadTriggered) {
+                    downloadTriggered = true
+                    downloadStatus = "⏳ Downloading Detection Model..."
+                    modelManager.downloadDetectionModelAsync(
+                        onProgress = { pct -> downloadStatus = "⏳ Downloading ($pct%)..." },
+                        onComplete = { result ->
+                            result.fold(
+                                onSuccess = {
+                                    downloadStatus = "✅ Detection Model Downloaded!"
+                                    showToast("Stellar Lang", "ONNX Detection model downloaded successfully!")
+                                },
+                                onFailure = { ex ->
+                                    downloadStatus = "❌ Download Failed: ${ex.message}"
+                                    showToast("Stellar Lang", "Model download failed: ${ex.message}")
+                                },
+                            )
+                        },
+                    )
+                }
+                Component.literal(downloadStatus)
+            }
+            .setTooltip(Component.literal("Click to trigger immediate download of the ONNX language detection model"))
+            .build()
+
+        val autoDownload = entries
+            .startBooleanToggle(Component.literal("Auto-Download Missing Models"), config.onnxAutoDownload.value())
+            .setDefaultValue(true)
+            .setTooltip(Component.literal("Automatically download required models on demand in the background"))
+            .setSaveConsumer { value -> config.onnxAutoDownload.setValue(value, true) }
+            .build()
+
+        val modelDir = entries
+            .startStrField(Component.literal("Model Storage Directory"), config.onnxModelDir.value())
+            .setDefaultValue("config/stellar_lang/models")
+            .setTooltip(Component.literal("Local path where ONNX neural models are stored"))
+            .setSaveConsumer { value -> config.onnxModelDir.setValue(value.trim(), true) }
+            .build()
+
+        val threads = entries
+            .startIntSlider(
+                Component.literal("Inference CPU Threads"),
+                config.onnxExecutionThreads.value(),
+                StellarLangConfig.MIN_ONNX_THREADS,
+                StellarLangConfig.MAX_ONNX_THREADS,
+            )
+            .setDefaultValue(StellarLangConfig.DEFAULT_ONNX_THREADS)
+            .setTooltip(Component.literal("Number of threads allocated for ONNX Runtime CPU inference"))
+            .setSaveConsumer { value -> config.onnxExecutionThreads.setValue(value, true) }
+            .build()
+
+        subCategory.add(statusDescription)
+        subCategory.add(downloadButton)
+        subCategory.add(autoDownload)
+        subCategory.add(modelDir)
+        subCategory.add(threads)
+    }
+
+    private fun buildLibreSubCategory(
+        subCategory: me.shedaniel.clothconfig2.impl.builders.SubCategoryBuilder,
+        entries: ConfigEntryBuilder,
+        config: StellarLangConfig,
+    ) {
         var currentHost = config.apiHost.value()
         var currentApiKey = config.apiKey.value()
 
@@ -90,10 +252,10 @@ object LangClothConfigScreen {
             )
             .build()
 
-        category.addEntry(apiHost)
-        category.addEntry(apiKey)
-        category.addEntry(testButton)
-        category.addEntry(instructions)
+        subCategory.add(apiHost)
+        subCategory.add(apiKey)
+        subCategory.add(testButton)
+        subCategory.add(instructions)
     }
 
     private fun buildApiHostField(

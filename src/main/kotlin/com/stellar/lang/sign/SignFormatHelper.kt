@@ -1,3 +1,5 @@
+@file:Suppress("LongMethod")
+
 package com.stellar.lang.sign
 
 import net.minecraft.network.chat.Component
@@ -124,16 +126,6 @@ object SignFormatHelper {
             }
         }
 
-        return buildFinalOutcome(originalText, pureFormattingIndices, assignedLines, excessText, translatedSentence)
-    }
-
-    private fun buildFinalOutcome(
-        originalText: SignText,
-        pureFormattingIndices: List<Int>,
-        assignedLines: Map<Int, String>,
-        excessText: String?,
-        fullTranslation: String = "",
-    ): SignTranslationOutcome {
         var newText = originalText
         for (i in 0 until SignText.LINES) {
             if (i !in pureFormattingIndices) {
@@ -141,7 +133,7 @@ object SignFormatHelper {
                 newText = newText.setMessage(i, Component.literal(text))
             }
         }
-        return SignTranslationOutcome(newText, excessText?.ifBlank { null }, fullTranslation)
+        return SignTranslationOutcome(newText, excessText?.ifBlank { null }, translatedSentence)
     }
 
     private fun packNonLastSlot(words: MutableList<String>, contentBudget: Int): String {

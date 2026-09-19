@@ -413,4 +413,75 @@ class ChatTranslationManagerSpec : FunSpec({
     test("copyChatHeadsData handles objects without chat heads methods gracefully") {
         ChatTranslationManager.copyChatHeadsData("plain source", "plain target")
     }
+
+    test("createTranslatedComponent with default prefix and isMatchingMessage edge cases") {
+        val fakeResult = TranslationResult("Bonjour", "Hello", "fr", "en", false)
+        val comp = ChatTranslationManager.createTranslatedComponent(999L, fakeResult)
+        comp.string shouldContain "[T] "
+        comp.string shouldContain "Hello"
+
+        val tracked = ChatTranslationManager.TrackedChatMessage(
+            id = 999L,
+            originalComponent = Component.literal("Bonjour"),
+            plainText = "Bonjour",
+            translatedComponent = comp,
+        )
+
+        val messageList = mutableListOf<net.minecraft.client.multiplayer.chat.GuiMessage>()
+        var dummyMsg = net.minecraft.client.multiplayer.chat.GuiMessage(
+            10,
+            comp,
+            null,
+            net.minecraft.client.multiplayer.chat.GuiMessageSource.SYSTEM_CLIENT,
+            null,
+        )
+        messageList.add(dummyMsg)
+
+        var refreshed = false
+        val fakeAccessor = object : com.stellar.lang.mixin.ChatComponentAccessor {
+            override fun stellarGetAllMessages(): MutableList<net.minecraft.client.multiplayer.chat.GuiMessage> =
+                messageList
+            override fun stellarRefreshTrimmedMessages() {
+                refreshed = true
+            }
+        }
+
+        ChatTranslationManager.updateChatDisplayWithAccessor(fakeAccessor, tracked)
+        refreshed shouldBe true
+
+        // Match by original component
+        dummyMsg = net.minecraft.client.multiplayer.chat.GuiMessage(
+            11,
+            tracked.originalComponent,
+            null,
+            net.minecraft.client.multiplayer.chat.GuiMessageSource.SYSTEM_CLIENT,
+            null,
+        )
+        messageList.clear()
+        messageList.add(dummyMsg)
+        refreshed = false
+        ChatTranslationManager.updateChatDisplayWithAccessor(fakeAccessor, tracked)
+        refreshed shouldBe true
+
+        // Match by translated string
+        dummyMsg = net.minecraft.client.multiplayer.chat.GuiMessage(
+            12,
+            Component.literal(comp.string),
+            null,
+            net.minecraft.client.multiplayer.chat.GuiMessageSource.SYSTEM_CLIENT,
+            null,
+        )
+        messageList.clear()
+        messageList.add(dummyMsg)
+        refreshed = false
+        ChatTranslationManager.updateChatDisplayWithAccessor(fakeAccessor, tracked)
+        refreshed shouldBe true
+    }
+
+    test("extractChatPayload edge cases with blank message after prefix") {
+        val blankAfterPrefix = Component.literal("<Player>   ")
+        val payload = ChatTranslationManager.extractChatPayload(blankAfterPrefix)
+        payload.prefixComponent shouldBe null
+        payload.messageText shouldBe "<Player>"
+    }
 })

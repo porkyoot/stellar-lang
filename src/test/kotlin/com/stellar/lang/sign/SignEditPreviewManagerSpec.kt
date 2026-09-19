@@ -11,6 +11,8 @@ class SignEditPreviewManagerSpec : FunSpec({
         TranslationService.clearCache()
         val config = TranslationService.getConfig()
         config.enabled.setValue(true, false)
+        config.translationPlugin.setValue("libretranslate", false)
+        config.detectionPlugin.setValue("libretranslate", false)
         config.translateSigns.setValue(true, false)
         config.targetLanguage.setValue("en", false)
     }

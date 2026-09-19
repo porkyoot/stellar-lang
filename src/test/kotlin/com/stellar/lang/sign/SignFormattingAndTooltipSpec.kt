@@ -38,6 +38,8 @@ class SignFormattingAndTooltipSpec : FunSpec({
         TranslationService.clearCache()
         val config = TranslationService.getConfig()
         config.enabled.setValue(true, false)
+        config.translationPlugin.setValue("libretranslate", false)
+        config.detectionPlugin.setValue("libretranslate", false)
         config.translateSigns.setValue(true, false)
         config.targetLanguage.setValue("en", false)
         config.apiHost.setValue("http://127.0.0.1:$serverPort", false)

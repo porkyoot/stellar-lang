@@ -50,6 +50,8 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
         TranslationService.clearCache()
         val config = TranslationService.getConfig()
         config.enabled.setValue(true, false)
+        config.translationPlugin.setValue("libretranslate", false)
+        config.detectionPlugin.setValue("libretranslate", false)
         config.apiHost.setValue("http://127.0.0.1:$serverPort", false)
         config.translateEntities.setValue(true, false)
         config.translateItems.setValue(true, false)

@@ -12,6 +12,21 @@ class StellarLangConfig : ReflectiveConfig() {
     @Comment("Master switch to enable or disable all Stellar Lang translations")
     val enabled: TrackedValue<Boolean> = value(true)
 
+    @Comment("Active translation provider plugin (e.g. onnx, libretranslate)")
+    val translationPlugin: TrackedValue<String> = value("onnx")
+
+    @Comment("Active language detection provider plugin (e.g. onnx, libretranslate)")
+    val detectionPlugin: TrackedValue<String> = value("onnx")
+
+    @Comment("Local directory for storing downloaded ONNX models")
+    val onnxModelDir: TrackedValue<String> = value("config/stellar_lang/models")
+
+    @Comment("Automatically download missing ONNX models when needed")
+    val onnxAutoDownload: TrackedValue<Boolean> = value(true)
+
+    @Comment("Number of CPU execution threads for ONNX Runtime inference")
+    val onnxExecutionThreads: TrackedValue<Int> = value(DEFAULT_ONNX_THREADS)
+
     @Comment("LibreTranslate API base URL (default: https://libretranslate.com)")
     val apiHost: TrackedValue<String> = value("https://libretranslate.com")
 
@@ -47,5 +62,8 @@ class StellarLangConfig : ReflectiveConfig() {
 
     companion object {
         const val DEFAULT_MAX_CACHE_ENTRIES: Int = 5000
+        const val DEFAULT_ONNX_THREADS: Int = 2
+        const val MIN_ONNX_THREADS: Int = 1
+        const val MAX_ONNX_THREADS: Int = 8
     }
 }

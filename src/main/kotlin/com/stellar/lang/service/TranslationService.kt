@@ -1,4 +1,4 @@
-@file:Suppress("LargeClass")
+@file:Suppress("LargeClass", "CognitiveComplexMethod")
 
 package com.stellar.lang.service
 
@@ -10,6 +10,8 @@ import com.google.gson.JsonParser
 import com.stellar.core.config.ConfigManager
 import com.stellar.lang.StellarLangMod
 import com.stellar.lang.config.StellarLangConfig
+import com.stellar.lang.plugin.PluginRegistry
+import com.stellar.lang.plugin.libretranslate.LibreTranslatePlugin
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import java.net.URI
@@ -127,17 +129,16 @@ object TranslationService {
             return
         }
 
-        dispatchTranslationTask(trimmed, key, config)
+        dispatchTranslationTask(trimmed, key)
     }
 
     private fun dispatchTranslationTask(
         trimmed: String,
         key: String,
-        config: StellarLangConfig,
     ) {
         val targetLang = getTargetLanguage()
         executor.execute {
-            val result = executeTranslation(trimmed, config.apiHost.value(), config.apiKey.value(), targetLang)
+            val result = executeTranslation(trimmed, targetLang)
             if (result != null) {
                 TranslationCache.put(result)
             } else {
@@ -155,13 +156,12 @@ object TranslationService {
         if (!config.enabled.value()) return null
 
         val targetLang = getTargetLanguage()
-        return resolveBatchTranslations(nonBlank, config, targetLang)
+        return resolveBatchTranslations(nonBlank, targetLang)
     }
 
     @Suppress("ReturnCount")
     private fun resolveBatchTranslations(
         texts: List<String>,
-        config: StellarLangConfig,
         targetLang: String,
     ): List<TranslationResult>? {
         val cachedMap = mutableMapOf<String, TranslationResult>()
@@ -184,7 +184,7 @@ object TranslationService {
             return null
         }
 
-        val fetched = executeBatchTranslation(missing, config.apiHost.value(), config.apiKey.value(), targetLang)
+        val fetched = executeBatchTranslation(missing, targetLang)
             ?: return null
 
         fetched.forEach { res ->
@@ -193,6 +193,93 @@ object TranslationService {
         }
 
         return texts.map { cachedMap[it] ?: TranslationResult(it, it, targetLang, targetLang, true) }
+    }
+
+    private fun executeTranslation(
+        text: String,
+        targetLang: String,
+    ): TranslationResult? {
+        val config = getConfig()
+        val translator = PluginRegistry.getActiveTranslator()
+        val detector = PluginRegistry.getActiveDetector()
+
+        if (translator is LibreTranslatePlugin && detector is LibreTranslatePlugin) {
+            return executeTranslation(text, config.apiHost.value(), config.apiKey.value(), targetLang)
+        }
+
+        return kotlinx.coroutines.runBlocking {
+            runCatching {
+                val detected = detector.detectLanguage(text) ?: UNKNOWN_LANG
+                val isSame = detected.equals(targetLang, ignoreCase = true)
+                if (isSame) {
+                    TranslationResult(
+                        originalText = text,
+                        translatedText = text,
+                        detectedLanguage = detected,
+                        targetLanguage = targetLang,
+                        isSameLanguage = true,
+                    )
+                } else {
+                    val translated = translator.translate(text, detected, targetLang)
+                    if (translated != null) {
+                        TranslationResult(
+                            originalText = text,
+                            translatedText = translated,
+                            detectedLanguage = detected,
+                            targetLanguage = targetLang,
+                            isSameLanguage = false,
+                        )
+                    } else {
+                        null
+                    }
+                }
+            }.onFailure { ex ->
+                logger.warn("Translation failed for '{}': {}", text, ex.message)
+            }.getOrNull()
+        }
+    }
+
+    private fun executeBatchTranslation(
+        texts: List<String>,
+        targetLang: String,
+    ): List<TranslationResult>? {
+        val config = getConfig()
+        val translator = PluginRegistry.getActiveTranslator()
+        val detector = PluginRegistry.getActiveDetector()
+
+        if (translator is LibreTranslatePlugin && detector is LibreTranslatePlugin) {
+            return executeBatchTranslation(texts, config.apiHost.value(), config.apiKey.value(), targetLang)
+        }
+
+        return kotlinx.coroutines.runBlocking {
+            runCatching {
+                val detected = detector.detectLanguage(texts.firstOrNull() ?: "") ?: UNKNOWN_LANG
+                val isSame = detected.equals(targetLang, ignoreCase = true)
+                if (isSame) {
+                    texts.map {
+                        TranslationResult(it, it, detected, targetLang, true)
+                    }
+                } else {
+                    val translatedList = translator.translateBatch(texts, detected, targetLang)
+                    if (translatedList != null) {
+                        texts.mapIndexed { index, original ->
+                            val trans = translatedList.getOrElse(index) { original }
+                            TranslationResult(
+                                originalText = original,
+                                translatedText = trans,
+                                detectedLanguage = detected,
+                                targetLanguage = targetLang,
+                                isSameLanguage = false,
+                            )
+                        }
+                    } else {
+                        null
+                    }
+                }
+            }.onFailure { ex ->
+                logger.warn("Batch translation failed: {}", ex.message)
+            }.getOrNull()
+        }
     }
 
     fun translateBatchAsync(texts: List<String>, callback: (List<TranslationResult>?) -> Unit) {
