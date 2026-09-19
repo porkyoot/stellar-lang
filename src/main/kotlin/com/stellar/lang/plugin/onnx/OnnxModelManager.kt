@@ -42,9 +42,7 @@ object OnnxModelManager {
     private const val HTTP_RANGE_NOT_SATISFIABLE = 416
 
     private val logger: Logger = LoggerFactory.getLogger("StellarLang-OnnxModelManager")
-    private val downloadExecutor = Executors.newFixedThreadPool(2) { runnable ->
-        Thread(runnable, "StellarLang-ModelDownloader").apply { isDaemon = true }
-    }
+    internal var downloadExecutor: java.util.concurrent.ExecutorService = createDownloadExecutor()
 
     private val defaultHttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(10))
@@ -70,7 +68,14 @@ object OnnxModelManager {
         activeDownloads.clear()
         failureCooldowns.clear()
         httpClientOverride = null
+        downloadExecutor.shutdownNow()
+        downloadExecutor = createDownloadExecutor()
     }
+
+    private fun createDownloadExecutor(): java.util.concurrent.ExecutorService =
+        Executors.newCachedThreadPool { runnable ->
+            Thread(runnable, "StellarLang-ModelDownloader").apply { isDaemon = true }
+        }
 
     fun isInCooldown(key: String): Boolean {
         val lastFail = failureCooldowns[key] ?: return false
@@ -221,6 +226,12 @@ object OnnxModelManager {
         }
     }
 
+    fun getTranslationModelUrl(targetLang: String): String {
+        val lang = targetLang.lowercase().trim()
+        val repo = if (lang == "en") "opus-mt-mul-en" else "opus-mt-en-$lang"
+        return "https://huggingface.co/onnx-community/$repo/resolve/main/onnx/encoder_model_quantized.onnx"
+    }
+
     fun downloadTranslationModelAsync(
         targetLang: String,
         modelUrl: String? = null,
@@ -243,8 +254,7 @@ object OnnxModelManager {
 
             downloadExecutor.execute {
                 val destination = getTranslationModelFile(targetLang)
-                val url = modelUrl
-                    ?: "https://huggingface.co/onnx-community/opus-mt-mul-en/resolve/main/onnx/model_quantized.onnx"
+                val url = modelUrl ?: getTranslationModelUrl(targetLang)
                 val result = runCatching {
                     downloadFileWithProgress(url, destination) { progress ->
                         state.progressPercent = progress

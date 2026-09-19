@@ -7,6 +7,7 @@
     "UnderscoresInNumericLiterals",
     "LongMethod",
     "CognitiveComplexMethod",
+    "StringLiteralDuplication",
 )
 
 package com.stellar.lang.plugin.onnx
@@ -240,14 +241,21 @@ object OnnxInferenceEngine : AutoCloseable {
         return runCatching {
             // Encode input sequence
             val tokens = simpleTokenize(trimmed, maxLen = 128)
+            val seqLen = tokens.size.toLong()
             val tokenBuffer = LongBuffer.wrap(tokens)
-            val inputTensor = OnnxTensor.createTensor(environment, tokenBuffer, longArrayOf(1, tokens.size.toLong()))
+            val inputTensor = OnnxTensor.createTensor(environment, tokenBuffer, longArrayOf(1, seqLen))
+            val maskBuffer = LongBuffer.wrap(LongArray(tokens.size) { 1L })
+            val maskTensor = OnnxTensor.createTensor(environment, maskBuffer, longArrayOf(1, seqLen))
 
-            val inputs = mapOf("input_ids" to inputTensor)
+            val inputs = mutableMapOf<String, OnnxTensor>("input_ids" to inputTensor)
+            if (session.inputNames.contains("attention_mask")) {
+                inputs["attention_mask"] = maskTensor
+            }
             val results = session.run(inputs)
             val outputTensor = results.get(0) as? OnnxTensor
 
             inputTensor.close()
+            maskTensor.close()
             results.close()
 
             outputTensor?.let {

@@ -13,6 +13,8 @@ import io.kotest.matchers.string.shouldContain
 import io.kotest.matchers.types.shouldBeInstanceOf
 import java.io.File
 import java.net.InetSocketAddress
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 class OnnxRobustnessSpec : FunSpec({
     val testDir = File("build/robust_test_models_${System.nanoTime()}")
@@ -37,7 +39,7 @@ class OnnxRobustnessSpec : FunSpec({
     }
 
     test("connection failure sets error status and cooldown") {
-        var completed = false
+        val latch = CountDownLatch(1)
         var failureOccurred = false
 
         OnnxModelManager.downloadDetectionModelAsync(
@@ -45,17 +47,12 @@ class OnnxRobustnessSpec : FunSpec({
             vocabUrl = "http://127.0.0.1:1/tokenizer.json",
             forceRetry = true,
             onComplete = { result ->
-                completed = true
                 failureOccurred = result.isFailure
+                latch.countDown()
             },
         )
 
-        var attempts = 0
-        while (attempts++ < 30 && !completed) {
-            Thread.sleep(50)
-        }
-
-        completed shouldBe true
+        latch.await(5, TimeUnit.SECONDS) shouldBe true
         failureOccurred shouldBe true
         OnnxModelManager.isInCooldown("detection") shouldBe true
         val status = OnnxModelManager.getDetectionStatus()
@@ -63,15 +60,14 @@ class OnnxRobustnessSpec : FunSpec({
     }
 
     test("cooldown prevents duplicate downloads unless forced") {
+        val latch = CountDownLatch(1)
         OnnxModelManager.downloadDetectionModelAsync(
             modelUrl = "http://127.0.0.1:1/model.onnx",
             forceRetry = true,
+            onComplete = { latch.countDown() },
         )
 
-        var attempts = 0
-        while (attempts++ < 30 && !OnnxModelManager.isInCooldown("detection")) {
-            Thread.sleep(50)
-        }
+        latch.await(5, TimeUnit.SECONDS) shouldBe true
         OnnxModelManager.isInCooldown("detection") shouldBe true
 
         var called = false
@@ -98,6 +94,8 @@ class OnnxRobustnessSpec : FunSpec({
 
         val transStatus = OnnxModelManager.getTranslationStatus("es")
         transStatus.shouldBeInstanceOf<PluginStatus.Downloading>()
+
+        OnnxModelManager.reset()
     }
 
     test("server returning 500 error marks download failed") {
@@ -109,7 +107,7 @@ class OnnxRobustnessSpec : FunSpec({
         server.start()
 
         val port = server.address.port
-        var completed = false
+        val latch = CountDownLatch(1)
         var isFailure = false
 
         try {
@@ -117,17 +115,12 @@ class OnnxRobustnessSpec : FunSpec({
                 modelUrl = "http://127.0.0.1:$port/model.onnx",
                 forceRetry = true,
                 onComplete = { result ->
-                    completed = true
                     isFailure = result.isFailure
+                    latch.countDown()
                 },
             )
 
-            var attempts = 0
-            while (attempts++ < 30 && !completed) {
-                Thread.sleep(50)
-            }
-
-            completed shouldBe true
+            latch.await(5, TimeUnit.SECONDS) shouldBe true
             isFailure shouldBe true
             OnnxModelManager.getDetectionStatus().shouldBeInstanceOf<PluginStatus.Error>()
         } finally {
@@ -146,7 +139,7 @@ class OnnxRobustnessSpec : FunSpec({
         server.start()
 
         val port = server.address.port
-        var completed = false
+        val latch = CountDownLatch(1)
         var isFailure = false
 
         try {
@@ -154,17 +147,12 @@ class OnnxRobustnessSpec : FunSpec({
                 modelUrl = "http://127.0.0.1:$port/html_model.onnx",
                 forceRetry = true,
                 onComplete = { result ->
-                    completed = true
                     isFailure = result.isFailure
+                    latch.countDown()
                 },
             )
 
-            var attempts = 0
-            while (attempts++ < 30 && !completed) {
-                Thread.sleep(50)
-            }
-
-            completed shouldBe true
+            latch.await(5, TimeUnit.SECONDS) shouldBe true
             isFailure shouldBe true
             OnnxModelManager.isDetectionModelReady() shouldBe false
         } finally {
@@ -205,7 +193,7 @@ class OnnxRobustnessSpec : FunSpec({
         // Simulate pre-existing partial file
         tempFile.writeBytes(modelBytes.copyOfRange(0, 200))
 
-        var completed = false
+        val latch = CountDownLatch(1)
         var isSuccess = false
 
         try {
@@ -214,17 +202,12 @@ class OnnxRobustnessSpec : FunSpec({
                 vocabUrl = "http://127.0.0.1:$port/tokenizer.json",
                 forceRetry = true,
                 onComplete = { result ->
-                    completed = true
                     isSuccess = result.isSuccess
+                    latch.countDown()
                 },
             )
 
-            var attempts = 0
-            while (attempts++ < 30 && !completed) {
-                Thread.sleep(50)
-            }
-
-            completed shouldBe true
+            latch.await(5, TimeUnit.SECONDS) shouldBe true
             isSuccess shouldBe true
             OnnxModelManager.isDetectionModelReady() shouldBe true
             targetModel.length() shouldBe modelBytes.size.toLong()
@@ -261,7 +244,7 @@ class OnnxRobustnessSpec : FunSpec({
         tempFile.parentFile.mkdirs()
         tempFile.writeBytes(ByteArray(10_000)) // invalid range bytes
 
-        var completed = false
+        val latch = CountDownLatch(1)
         var isSuccess = false
 
         try {
@@ -270,17 +253,12 @@ class OnnxRobustnessSpec : FunSpec({
                 vocabUrl = "http://127.0.0.1:$port/tokenizer.json",
                 forceRetry = true,
                 onComplete = { result ->
-                    completed = true
                     isSuccess = result.isSuccess
+                    latch.countDown()
                 },
             )
 
-            var attempts = 0
-            while (attempts++ < 30 && !completed) {
-                Thread.sleep(50)
-            }
-
-            completed shouldBe true
+            latch.await(5, TimeUnit.SECONDS) shouldBe true
             isSuccess shouldBe true
             OnnxModelManager.isDetectionModelReady() shouldBe true
             targetModel.length() shouldBe modelBytes.size.toLong()
@@ -302,7 +280,7 @@ class OnnxRobustnessSpec : FunSpec({
         server.start()
 
         val port = server.address.port
-        var completed = false
+        val latch = CountDownLatch(1)
         var isSuccess = false
 
         try {
@@ -311,17 +289,12 @@ class OnnxRobustnessSpec : FunSpec({
                 modelUrl = "http://127.0.0.1:$port/trans_model.onnx",
                 forceRetry = true,
                 onComplete = { result ->
-                    completed = true
                     isSuccess = result.isSuccess
+                    latch.countDown()
                 },
             )
 
-            var attempts = 0
-            while (attempts++ < 30 && !completed) {
-                Thread.sleep(50)
-            }
-
-            completed shouldBe true
+            latch.await(5, TimeUnit.SECONDS) shouldBe true
             isSuccess shouldBe true
             OnnxModelManager.isTranslationModelReady("es") shouldBe true
         } finally {
@@ -340,7 +313,7 @@ class OnnxRobustnessSpec : FunSpec({
         server.start()
 
         val port = server.address.port
-        var completed = false
+        val latch = CountDownLatch(1)
         var isFailure = false
 
         try {
@@ -349,17 +322,12 @@ class OnnxRobustnessSpec : FunSpec({
                 modelUrl = "http://127.0.0.1:$port/corrupt_large.onnx",
                 forceRetry = true,
                 onComplete = { result ->
-                    completed = true
                     isFailure = result.isFailure
+                    latch.countDown()
                 },
             )
 
-            var attempts = 0
-            while (attempts++ < 30 && !completed) {
-                Thread.sleep(50)
-            }
-
-            completed shouldBe true
+            latch.await(5, TimeUnit.SECONDS) shouldBe true
             isFailure shouldBe true
             OnnxModelManager.isTranslationModelReady("it") shouldBe false
         } finally {

@@ -58,6 +58,22 @@ class OnnxPluginSpec : FunSpec({
         OnnxInferenceEngine.resetSessions()
     }
 
+    test("OnnxTranslationPlugin with attention_mask model") {
+        val tempDir = java.io.File("build/test_trans_mask_${System.nanoTime()}")
+        val transDir = java.io.File(tempDir, "translation/es").apply { mkdirs() }
+        java.io.File("src/test/resources/test_models/detection/model.onnx").copyTo(java.io.File(transDir, "model.onnx"))
+
+        val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")!!
+        config.onnxModelDir.setValue(tempDir.path, false)
+        OnnxInferenceEngine.resetSessions()
+
+        val translator = OnnxTranslationPlugin()
+        translator.translate("Hello world", "en", "es") shouldBe "Hello world"
+
+        tempDir.deleteRecursively()
+        OnnxInferenceEngine.resetSessions()
+    }
+
     test("OnnxTranslationPlugin metadata and status") {
         val plugin = OnnxTranslationPlugin()
         plugin.id shouldBe "onnx"
@@ -149,6 +165,13 @@ class OnnxPluginSpec : FunSpec({
         val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")!!
         config.onnxAutoDownload.setValue(true, false)
         config.onnxModelDir.setValue("build/missing_models_${System.nanoTime()}", false)
+
+        val field = OnnxModelManager::class.java.getDeclaredField("failureCooldowns")
+        field.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val cooldowns = field.get(OnnxModelManager) as MutableMap<String, Long>
+        cooldowns["detection"] = System.currentTimeMillis()
+        cooldowns["translation-en"] = System.currentTimeMillis()
 
         val detector = OnnxLanguageDetectorPlugin()
         detector.detectLanguage("Bonjour le monde") shouldBe null

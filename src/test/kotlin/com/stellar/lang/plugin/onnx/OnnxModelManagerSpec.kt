@@ -56,6 +56,10 @@ class OnnxModelManagerSpec : FunSpec({
         detModel.name shouldBe "model.onnx"
         OnnxModelManager.getDetectionVocabFile().name shouldBe "tokenizer.json"
         OnnxModelManager.getTranslationModelFile("fr").name shouldBe "model.onnx"
+        OnnxModelManager.getTranslationModelUrl("en") shouldBe
+            "https://huggingface.co/onnx-community/opus-mt-mul-en/resolve/main/onnx/encoder_model_quantized.onnx"
+        OnnxModelManager.getTranslationModelUrl("es") shouldBe
+            "https://huggingface.co/onnx-community/opus-mt-en-es/resolve/main/onnx/encoder_model_quantized.onnx"
 
         OnnxModelManager.isDetectionModelReady() shouldBe false
         OnnxModelManager.isTranslationModelReady("fr") shouldBe false
