@@ -47,15 +47,21 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
     }
 
     beforeEach {
+        com.stellar.lang.input.StellarLangInputHandler.clearProviders()
         TranslationService.clearCache()
         val config = TranslationService.getConfig()
         config.enabled.setValue(true, false)
+        config.showOriginalKey.setValue(44, false)
         config.translationPlugin.setValue("libretranslate", false)
         config.detectionPlugin.setValue("libretranslate", false)
         config.apiHost.setValue("http://127.0.0.1:$serverPort", false)
         config.translateEntities.setValue(true, false)
         config.translateItems.setValue(true, false)
         config.targetLanguage.setValue("en", false)
+    }
+
+    afterEach {
+        com.stellar.lang.input.StellarLangInputHandler.clearProviders()
     }
 
     test("EntityTranslationManager getTranslatableText filters accurately") {
@@ -487,5 +493,66 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
         entityRes.string shouldBe "[...] $text"
 
         com.stellar.lang.service.TranslationCache.completeInFlight(key, null)
+    }
+
+    fun createMockEntity(nameComp: Component?): ArmorStand {
+        val unsafeField = sun.misc.Unsafe::class.java.getDeclaredField("theUnsafe")
+        unsafeField.isAccessible = true
+        val unsafe = unsafeField.get(null) as sun.misc.Unsafe
+
+        val accessorField = net.minecraft.world.entity.Entity::class.java.getDeclaredField("DATA_CUSTOM_NAME")
+        accessorField.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val accessor = accessorField.get(null) as EntityDataAccessor<Optional<Component>>
+
+        val dataItem = SynchedEntityData.DataItem(accessor, Optional.ofNullable(nameComp))
+
+        @Suppress("UNCHECKED_CAST")
+        val items = java.lang.reflect.Array.newInstance(
+            SynchedEntityData.DataItem::class.java,
+            accessor.id + 1,
+        ) as Array<SynchedEntityData.DataItem<*>?>
+        items[accessor.id] = dataItem
+
+        val synchedData = unsafe.allocateInstance(SynchedEntityData::class.java) as SynchedEntityData
+        val itemsField = SynchedEntityData::class.java.getDeclaredField("itemsById")
+        itemsField.isAccessible = true
+        itemsField.set(synchedData, items)
+
+        val entity = unsafe.allocateInstance(ArmorStand::class.java) as ArmorStand
+        val entityDataField = net.minecraft.world.entity.Entity::class.java.getDeclaredField("entityData")
+        entityDataField.isAccessible = true
+        entityDataField.set(entity, synchedData)
+        return entity
+    }
+
+    test("refreshEntity updates cache on success and failure") {
+        EntityTranslationManager.clearCache()
+        val armorStand = createMockEntity(Component.literal("Monstre Sombre"))
+
+        // 1. Success case
+        val ok = EntityTranslationManager.refreshEntity(armorStand)
+        ok shouldBe true
+
+        // 2. Failure case with unreachable host
+        val config = TranslationService.getConfig()
+        config.apiHost.setValue("http://127.0.0.1:1", false)
+        val okFail = EntityTranslationManager.refreshEntity(armorStand)
+        okFail shouldBe true
+
+        var attempts = 0
+        val targetLang = TranslationService.getTargetLanguage()
+        val textKey = "$targetLang::Monstre Sombre"
+        while (attempts++ < 30 && !EntityTranslationManager.failedEntities.contains(textKey)) {
+            Thread.sleep(50)
+        }
+        EntityTranslationManager.failedEntities.contains(textKey) shouldBe true
+
+        // Reset host
+        config.apiHost.setValue("http://127.0.0.1:$serverPort", false)
+
+        // Empty / untranslatable entity returns false
+        val emptyStand = createMockEntity(Component.literal(""))
+        EntityTranslationManager.refreshEntity(emptyStand) shouldBe false
     }
 })

@@ -27,6 +27,29 @@ object BookTranslationManager {
         }
     }
 
+    fun refreshBook(bookAccess: BookViewScreen.BookAccess): Boolean {
+        val originalPages = bookAccess.pages()
+        val pageTexts = originalPages.map { it.string.trim() }
+        if (pageTexts.isEmpty() || pageTexts.all { it.isBlank() }) return false
+        val targetLang = TranslationService.getTargetLanguage()
+        val cacheKey = "$targetLang::${pageTexts.joinToString("||") { it.hashCode().toString() }}"
+        resultCache.remove(cacheKey)
+        translatedBooks.remove(cacheKey)
+        pageTexts.forEach { text ->
+            if (text.isNotBlank()) {
+                TranslationService.evict(text, targetLang)
+            }
+        }
+        translateBookDetailedAsync(bookAccess, forceRetry = true) {}
+        return true
+    }
+
+    fun refreshBook(stack: net.minecraft.world.item.ItemStack): Boolean {
+        if (runCatching { stack.isEmpty }.getOrDefault(true)) return false
+        val access = runCatching { BookViewScreen.BookAccess.fromItem(stack) }.getOrNull() ?: return false
+        return refreshBook(access)
+    }
+
     fun translatePagesDetailedAsync(
         pages: List<String>,
         forceRetry: Boolean = false,

@@ -38,6 +38,28 @@ object ItemTranslationManager {
         lastItemRetryTimes.clear()
     }
 
+    fun refreshItem(stack: ItemStack): Boolean {
+        if (stack.isEmpty) return false
+        val nameComp = stack.customName ?: stack.hoverName
+        val plainText = getTranslatableText(nameComp) ?: return false
+        val targetLang = TranslationService.getTargetLanguage()
+        val cacheKey = "$targetLang::${plainText.hashCode()}"
+        itemCache.remove(cacheKey)
+        failedItems.remove(cacheKey)
+        lastItemRetryTimes.remove(cacheKey)
+        TranslationService.evict(plainText, targetLang)
+        TranslationService.translateAsync(plainText, forceRetry = true) { result ->
+            if (result != null && !result.isSameLanguage) {
+                failedItems.remove(cacheKey)
+                itemCache[cacheKey] = createFormattedName(result.translatedText)
+            } else if (result == null) {
+                failedItems.add(cacheKey)
+                itemCache[cacheKey] = createFailedName(plainText)
+            }
+        }
+        return true
+    }
+
     private fun getValidCachedItem(cacheKey: String, plainText: String, targetLang: String): Component? {
         val cached = itemCache[cacheKey] ?: return null
         if (!failedItems.contains(cacheKey)) return cached

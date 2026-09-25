@@ -6,6 +6,7 @@ import com.stellar.lang.item.ItemTranslationManager
 import com.stellar.lang.sign.SignTranslationManager
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
+import io.kotest.matchers.shouldNotBe
 import net.minecraft.network.chat.Component
 import net.minecraft.world.level.block.entity.SignText
 import java.util.concurrent.atomic.AtomicBoolean
@@ -16,6 +17,10 @@ class TranslationRetrySpec : FunSpec({
         val config = TranslationService.getConfig()
         config.enabled.setValue(true, false)
         config.targetLanguage.setValue("en", false)
+        config.translationPlugin.setValue("onnx", false)
+        config.detectionPlugin.setValue("onnx", false)
+        com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackTranslator(null)
+        com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackDetector(null)
         TranslationService.languageProvider = null
         TranslationService.clearCache()
         SignTranslationManager.clearCache()
@@ -522,5 +527,364 @@ class TranslationRetrySpec : FunSpec({
         EntityTranslationManager.failedEntities.add(entityKey)
         resolveEntityMethod.invoke(EntityTranslationManager, entityText, targetLang, entityKey, entityComp)
         TranslationCache.completeInFlight(entityKey, null)
+    }
+
+    test("isSameLanguage normalizes regional variants, cases, and filters special codes") {
+        TranslationService.isSameLanguage("en", "EN") shouldBe true
+        TranslationService.isSameLanguage("en_US", "en") shouldBe true
+        TranslationService.isSameLanguage("en-GB", "en_US") shouldBe true
+        TranslationService.isSameLanguage("es", "fr") shouldBe false
+        TranslationService.isSameLanguage("unknown", "en") shouldBe false
+        TranslationService.isSameLanguage("auto", "en") shouldBe false
+        TranslationService.isSameLanguage(null, "en") shouldBe false
+        TranslationService.isSameLanguage("", "en") shouldBe false
+    }
+
+    test("isUntranslatedFailure detects identical output when detected language differs") {
+        TranslationService.isUntranslatedFailure("Bonjour", "Bonjour", "fr", "en") shouldBe true
+        TranslationService.isUntranslatedFailure("Bonjour", "bonjour", "fr", "en") shouldBe true
+        TranslationService.isUntranslatedFailure("Hello", "Hello", "en", "en") shouldBe false
+        TranslationService.isUntranslatedFailure("12345", "12345", "fr", "en") shouldBe false
+        TranslationService.isUntranslatedFailure("Bonjour", "Hello", "fr", "en") shouldBe false
+        TranslationService.isUntranslatedFailure("Bonjour", null, "fr", "en") shouldBe true
+
+        val resFailure = TranslationResult("Bonjour", "Bonjour", "fr", "en", false)
+        TranslationService.isUntranslatedFailure(resFailure) shouldBe true
+
+        val resSuccess = TranslationResult("Bonjour", "Hello", "fr", "en", false)
+        TranslationService.isUntranslatedFailure(resSuccess) shouldBe false
+    }
+
+    test("isBatchUntranslatedFailure detects when batch translations are identical to input") {
+        val orig = listOf("Pomme", "Poire", "100")
+        val echoed = listOf("Pomme", "Poire", "100")
+        val translated = listOf("Apple", "Pear", "100")
+
+        TranslationService.isBatchUntranslatedFailure(orig, echoed, "fr", "en") shouldBe true
+        TranslationService.isBatchUntranslatedFailure(orig, translated, "fr", "en") shouldBe false
+        TranslationService.isBatchUntranslatedFailure(orig, null, "fr", "en") shouldBe true
+        TranslationService.isBatchUntranslatedFailure(orig, listOf("Apple"), "fr", "en") shouldBe true
+        val numBatch = listOf("100", "200")
+        TranslationService.isBatchUntranslatedFailure(numBatch, numBatch, "fr", "en") shouldBe false
+    }
+
+    test("TranslationService retries with active provider when translation returns unchanged text") {
+        val config = TranslationService.getConfig()
+        val attempts = java.util.concurrent.atomic.AtomicInteger(0)
+        val retryTranslator = object : com.stellar.lang.plugin.TranslationPlugin {
+            override val id = "retry_test"
+            override val displayName = "Retry Test"
+            override val description = "Retries"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready()
+            override suspend fun translate(text: String, sourceLang: String?, targetLang: String): String {
+                if (text != "MotFrancais") return text
+                return if (attempts.incrementAndGet() == 1) {
+                    text
+                } else {
+                    "Success Translated"
+                }
+            }
+        }
+        com.stellar.lang.plugin.PluginRegistry.registerTranslator(retryTranslator)
+        com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackTranslator(null)
+        config.translationPlugin.setValue("retry_test", false)
+
+        try {
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var result: TranslationResult? = null
+            TranslationService.translateAsync("MotFrancais", forceRetry = true) { res ->
+                result = res
+                latch.countDown()
+            }
+            latch.await(3, java.util.concurrent.TimeUnit.SECONDS)
+
+            attempts.get() shouldBe 2
+            result?.translatedText shouldBe "Success Translated"
+        } finally {
+            com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackTranslator(null)
+        }
+    }
+
+    test("TranslationService falls back to secondary provider when primary returns unchanged text") {
+        val config = TranslationService.getConfig()
+        val primaryAttempts = java.util.concurrent.atomic.AtomicInteger(0)
+        val fallbackAttempts = java.util.concurrent.atomic.AtomicInteger(0)
+
+        val primaryTranslator = object : com.stellar.lang.plugin.TranslationPlugin {
+            override val id = "primary_fail"
+            override val displayName = "Primary Fail"
+            override val description = "Fails"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready()
+            override suspend fun translate(text: String, sourceLang: String?, targetLang: String): String {
+                if (text == "TexteInchange") primaryAttempts.incrementAndGet()
+                return text
+            }
+        }
+
+        val secondaryTranslator = object : com.stellar.lang.plugin.TranslationPlugin {
+            override val id = "secondary_ok"
+            override val displayName = "Secondary OK"
+            override val description = "Succeeds"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready()
+            override suspend fun translate(text: String, sourceLang: String?, targetLang: String): String {
+                if (text == "TexteInchange") fallbackAttempts.incrementAndGet()
+                return "Fallback Success"
+            }
+        }
+
+        com.stellar.lang.plugin.PluginRegistry.registerTranslator(primaryTranslator)
+        com.stellar.lang.plugin.PluginRegistry.registerTranslator(secondaryTranslator)
+        com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackTranslator(secondaryTranslator)
+        config.translationPlugin.setValue("primary_fail", false)
+
+        try {
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var result: TranslationResult? = null
+            TranslationService.translateAsync("TexteInchange", forceRetry = true) { res ->
+                result = res
+                latch.countDown()
+            }
+            latch.await(3, java.util.concurrent.TimeUnit.SECONDS)
+
+            primaryAttempts.get() shouldBe 2
+            fallbackAttempts.get() shouldBe 1
+            result?.translatedText shouldBe "Fallback Success"
+        } finally {
+            com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackTranslator(null)
+        }
+    }
+
+    test("TranslationService marks failure when both primary and secondary return unchanged text") {
+        val config = TranslationService.getConfig()
+        val pAttempts = java.util.concurrent.atomic.AtomicInteger(0)
+        val sAttempts = java.util.concurrent.atomic.AtomicInteger(0)
+
+        val pTranslator = object : com.stellar.lang.plugin.TranslationPlugin {
+            override val id = "p_fail"
+            override val displayName = "P Fail"
+            override val description = "Fails"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready()
+            override suspend fun translate(text: String, sourceLang: String?, targetLang: String): String {
+                if (text == "EchecTotal") pAttempts.incrementAndGet()
+                return text
+            }
+        }
+
+        val sTranslator = object : com.stellar.lang.plugin.TranslationPlugin {
+            override val id = "s_fail"
+            override val displayName = "S Fail"
+            override val description = "Fails"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready()
+            override suspend fun translate(text: String, sourceLang: String?, targetLang: String): String {
+                if (text == "EchecTotal") sAttempts.incrementAndGet()
+                return text
+            }
+        }
+
+        com.stellar.lang.plugin.PluginRegistry.registerTranslator(pTranslator)
+        com.stellar.lang.plugin.PluginRegistry.registerTranslator(sTranslator)
+        com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackTranslator(sTranslator)
+        config.translationPlugin.setValue("p_fail", false)
+
+        try {
+            val latch = java.util.concurrent.CountDownLatch(1)
+            var result: TranslationResult? = TranslationResult("dummy", "dummy", "fr", "en", false)
+            TranslationService.translateAsync("EchecTotal", forceRetry = true) { res ->
+                result = res
+                latch.countDown()
+            }
+            latch.await(3, java.util.concurrent.TimeUnit.SECONDS)
+
+            pAttempts.get() shouldBe 2
+            sAttempts.get() shouldBe 2
+            result shouldBe null
+            TranslationService.isFailed("EchecTotal", "en") shouldBe true
+        } finally {
+            com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackTranslator(null)
+        }
+    }
+
+    test("translateBatchSync falls back to secondary provider when primary returns unchanged batch") {
+        val config = TranslationService.getConfig()
+        val bPrimaryAttempts = java.util.concurrent.atomic.AtomicInteger(0)
+        val bSecondaryAttempts = java.util.concurrent.atomic.AtomicInteger(0)
+
+        val batchPrimary = object : com.stellar.lang.plugin.TranslationPlugin {
+            override val id = "bp_fail"
+            override val displayName = "BP Fail"
+            override val description = "Fail"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready()
+            override suspend fun translate(text: String, sourceLang: String?, targetLang: String): String? = null
+            override suspend fun translateBatch(
+                texts: List<String>,
+                sourceLang: String?,
+                targetLang: String,
+            ): List<String> {
+                bPrimaryAttempts.incrementAndGet()
+                return texts
+            }
+        }
+
+        val batchSecondary = object : com.stellar.lang.plugin.TranslationPlugin {
+            override val id = "bs_ok"
+            override val displayName = "BS OK"
+            override val description = "OK"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready()
+            override suspend fun translate(text: String, sourceLang: String?, targetLang: String): String? = null
+            override suspend fun translateBatch(
+                texts: List<String>,
+                sourceLang: String?,
+                targetLang: String,
+            ): List<String> {
+                bSecondaryAttempts.incrementAndGet()
+                return texts.map { "BatchOK-$it" }
+            }
+        }
+
+        com.stellar.lang.plugin.PluginRegistry.registerTranslator(batchPrimary)
+        com.stellar.lang.plugin.PluginRegistry.registerTranslator(batchSecondary)
+        com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackTranslator(batchSecondary)
+        config.translationPlugin.setValue("bp_fail", false)
+
+        try {
+            val batchResults = TranslationService.translateBatchSync(listOf("LivreA", "LivreB"))
+            bPrimaryAttempts.get() shouldBe 2
+            bSecondaryAttempts.get() shouldBe 1
+            batchResults shouldNotBe null
+            batchResults!!.size shouldBe 2
+            batchResults[0].translatedText shouldBe "BatchOK-LivreA"
+            batchResults[1].translatedText shouldBe "BatchOK-LivreB"
+        } finally {
+            com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackTranslator(null)
+            config.translationPlugin.setValue("onnx", false)
+        }
+    }
+
+    test("TranslationPlugin default translateBatch implementation") {
+        val plugin = object : com.stellar.lang.plugin.TranslationPlugin {
+            override val id = "tp_default"
+            override val displayName = "TP Default"
+            override val description = "Test default"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready()
+            override suspend fun translate(text: String, sourceLang: String?, targetLang: String): String? {
+                return if (text == "hello") "bonjour" else null
+            }
+        }
+        kotlinx.coroutines.runBlocking {
+            val batch = plugin.translateBatch(listOf("hello", "world"), "en", "fr")
+            batch shouldBe listOf("bonjour", "world")
+        }
+    }
+
+    test("PluginRegistry fallback detector, candidates, and defaults") {
+        val dummyDetector = object : com.stellar.lang.plugin.LanguageDetectorPlugin {
+            override val id = "dummy_det"
+            override val displayName = "Dummy"
+            override val description = "Dummy"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready()
+            override suspend fun detectLanguage(text: String): String = "en"
+        }
+        com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackDetector(dummyDetector)
+        com.stellar.lang.plugin.PluginRegistry.getFallbackDetector() shouldBe dummyDetector
+
+        val candidates = com.stellar.lang.plugin.PluginRegistry.getCandidateTranslators()
+        candidates.isNotEmpty() shouldBe true
+
+        com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackDetector(null)
+        com.stellar.lang.plugin.PluginRegistry.getFallbackTranslator() shouldNotBe null
+        com.stellar.lang.plugin.PluginRegistry.getFallbackDetector() shouldNotBe null
+    }
+
+    test("TranslationService executeTranslation and executeBatchTranslation for non-letter strings return original") {
+        val single = TranslationService.executeTranslation("12345", "fr")
+        single shouldNotBe null
+        single!!.translatedText shouldBe "12345"
+        single.isSameLanguage shouldBe true
+
+        val batch = TranslationService.executeBatchTranslation(listOf("123", "!@#"), "fr")
+        batch shouldNotBe null
+        batch!!.size shouldBe 2
+        batch[0].translatedText shouldBe "123"
+        batch[1].translatedText shouldBe "!@#"
+        batch[0].isSameLanguage shouldBe true
+    }
+
+    test("TranslationService getCandidateTranslators returns candidates") {
+        val candidates = TranslationService.getCandidateTranslators("en")
+        candidates.isNotEmpty() shouldBe true
+    }
+
+    test("TranslationService batch translation fixes individually untranslated items via single fallback") {
+        val config = TranslationService.getConfig()
+        val batchFixPlugin = object : com.stellar.lang.plugin.TranslationPlugin {
+            override val id = "batch_fix_test"
+            override val displayName = "Batch Fix Test"
+            override val description = "Test"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready()
+            override suspend fun translate(text: String, sourceLang: String?, targetLang: String): String {
+                return "FixedSingle-$text"
+            }
+            override suspend fun translateBatch(
+                texts: List<String>,
+                sourceLang: String?,
+                targetLang: String,
+            ): List<String> {
+                return listOf("BatchOK-${texts[0]}", texts[1])
+            }
+        }
+        val det = object : com.stellar.lang.plugin.LanguageDetectorPlugin {
+            override val id = "det_fixed"
+            override val displayName = "Det Fixed"
+            override val description = "Det"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready()
+            override suspend fun detectLanguage(text: String): String = "fr"
+        }
+        com.stellar.lang.plugin.PluginRegistry.registerTranslator(batchFixPlugin)
+        com.stellar.lang.plugin.PluginRegistry.registerDetector(det)
+        config.translationPlugin.setValue("batch_fix_test", false)
+        config.detectionPlugin.setValue("det_fixed", false)
+
+        try {
+            val batchResults = TranslationService.executeBatchTranslation(listOf("BonjourA", "BonjourB"), "en")
+            batchResults shouldNotBe null
+            batchResults!!.size shouldBe 2
+            batchResults[0].translatedText shouldBe "BatchOK-BonjourA"
+            batchResults[1].translatedText shouldBe "FixedSingle-BonjourB"
+        } finally {
+            config.translationPlugin.setValue("onnx", false)
+            config.detectionPlugin.setValue("onnx", false)
+        }
+    }
+
+    test("TranslationService breaks early on non-retryable exception") {
+        val fatalPlugin = object : com.stellar.lang.plugin.TranslationPlugin {
+            override val id = "fatal_test"
+            override val displayName = "Fatal Test"
+            override val description = "Test"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready()
+            override suspend fun translate(text: String, sourceLang: String?, targetLang: String): String {
+                throw java.net.ConnectException("Connection refused")
+            }
+            override suspend fun translateBatch(
+                texts: List<String>,
+                sourceLang: String?,
+                targetLang: String,
+            ): List<String> {
+                throw java.net.ConnectException("Connection refused")
+            }
+        }
+        val config = TranslationService.getConfig()
+        com.stellar.lang.plugin.PluginRegistry.registerTranslator(fatalPlugin)
+        config.translationPlugin.setValue("fatal_test", false)
+
+        try {
+            val res = TranslationService.executeTranslation("Hello fatal", "fr")
+            res shouldBe null
+
+            val batchRes = TranslationService.executeBatchTranslation(listOf("Hello fatal"), "fr")
+            batchRes shouldBe null
+        } finally {
+            config.translationPlugin.setValue("onnx", false)
+        }
     }
 })

@@ -46,6 +46,11 @@ Powered by **LibreTranslate**, Stellar Lang leverages contextual translation: ne
 ### 🏷️ Entity & Item Name Translation
 * Custom nametags on entities and item hover tooltips are translated automatically with a subtle `[T]` indicator.
 
+### 📦 Container & Inventory Label Translation
+* Automatically translates container titles (chests, barrels, furnaces, shulkers, hoppers, dispensers, etc.) and inventory labels **if and only if** they have been player-renamed and are not in the target language.
+* Default vanilla labels remain completely untranslated by the mod (rendered through vanilla localization), preserving full client compatibility.
+* Press `.` (Period) while looking at a container block or with the container screen open to retry/refresh the translation. Hold `,` (Comma) to peek at the original label.
+
 ### ⚡ High Performance & Resilience
 * **Non-Blocking Async Pipeline:** Translations execute on dedicated background worker threads (`StellarLang-Worker`), preventing main-thread or render-thread hitches.
 * **Request Coalescing:** Identical concurrent requests are automatically coalesced into a single HTTP call.

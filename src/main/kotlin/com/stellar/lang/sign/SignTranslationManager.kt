@@ -51,6 +51,25 @@ object SignTranslationManager {
         translateSignText(signText)
     }
 
+    fun refreshSign(sign: SignBlockEntity): Boolean {
+        val frontRefreshed = refreshSignText(sign.frontText)
+        val backRefreshed = refreshSignText(sign.backText)
+        return frontRefreshed || backRefreshed
+    }
+
+    fun refreshSignText(signText: SignText): Boolean {
+        val sentence = extractSentence(signText)
+        if (sentence.isBlank()) return false
+        val targetLang = TranslationService.getTargetLanguage()
+        val textKey = buildTextKey(targetLang, sentence)
+        textOutcomeCache.remove(textKey)
+        failedSignKeys.remove(textKey)
+        lastSignRetryTimes.remove(textKey)
+        TranslationService.evict(sentence, targetLang)
+        translateSignText(signText, forceRetry = true)
+        return true
+    }
+
     @JvmOverloads
     @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod", "ReturnCount")
     fun translateSignText(signText: SignText, forceRetry: Boolean = false) {

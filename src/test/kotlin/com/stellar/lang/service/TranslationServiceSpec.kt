@@ -281,7 +281,7 @@ class TranslationServiceSpec : FunSpec({
     test("requests work with blank API key") {
         val config = TranslationService.getConfig()
         config.apiKey.setValue("", false)
-        responseBody = """{"translatedText": ["NoApiKey"], "detectedLanguage": "en"}"""
+        responseBody = """{"translatedText": ["SinApiKey"], "detectedLanguage": "en"}"""
         val results = TranslationService.translateBatchSync(listOf("NoApiKey"))
         results shouldNotBe null
         results!!.size shouldBe 1

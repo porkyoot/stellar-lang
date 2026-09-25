@@ -39,11 +39,34 @@ object EntityTranslationManager {
         onEntityNameChanged(customName)
     }
 
+    private fun buildTextKey(targetLang: String, plainText: String): String = "$targetLang::$plainText"
+
+    fun refreshEntity(entity: Entity): Boolean {
+        val nameComp = entity.customName ?: entity.name
+        val plainText = getTranslatableText(nameComp) ?: return false
+        val targetLang = TranslationService.getTargetLanguage()
+        val textKey = buildTextKey(targetLang, plainText)
+        textComponentCache.remove(textKey)
+        failedEntities.remove(textKey)
+        lastEntityRetryTimes.remove(textKey)
+        TranslationService.evict(plainText, targetLang)
+        TranslationService.translateAsync(plainText, forceRetry = true) { result ->
+            if (result != null && !result.isSameLanguage) {
+                failedEntities.remove(textKey)
+                textComponentCache[textKey] = createFormattedName(result.translatedText)
+            } else if (result == null) {
+                failedEntities.add(textKey)
+                textComponentCache[textKey] = createFailedName(plainText)
+            }
+        }
+        return true
+    }
+
     fun onEntityNameChanged(name: Component) {
         val plainText = getTranslatableText(name) ?: return
         val config = TranslationService.getConfig()
         val targetLang = TranslationService.getTargetLanguage()
-        val textKey = "$targetLang::$plainText"
+        val textKey = buildTextKey(targetLang, plainText)
 
         val cachedResult = TranslationService.getCached(plainText, targetLang)
         if (cachedResult != null) {
@@ -79,7 +102,7 @@ object EntityTranslationManager {
         val plainText = getTranslatableText(original) ?: return original
         val config = TranslationService.getConfig()
         val targetLang = TranslationService.getTargetLanguage()
-        val textKey = "$targetLang::$plainText"
+        val textKey = buildTextKey(targetLang, plainText)
 
         if (TranslationService.isInFlight(plainText, targetLang)) {
             return createTranslatingName(plainText)

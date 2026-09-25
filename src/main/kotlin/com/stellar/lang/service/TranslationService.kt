@@ -28,7 +28,13 @@ import java.util.concurrent.TimeUnit
 /**
  * Service managing communication with LibreTranslate API, caching, and language detection.
  */
-@Suppress("TooManyFunctions", "LongMethod", "CyclomaticComplexMethod")
+@Suppress(
+    "TooManyFunctions",
+    "LongMethod",
+    "CyclomaticComplexMethod",
+    "NestedBlockDepth",
+    "LoopWithTooManyJumpStatements",
+)
 object TranslationService {
     private val logger: Logger = LoggerFactory.getLogger(StellarLangMod.MOD_ID)
     private val gson = Gson()
@@ -44,6 +50,11 @@ object TranslationService {
     private const val HEADER_ACCEPT = "Accept"
     private const val ERROR_SNIPPET_LENGTH = 80
     private const val UNKNOWN_LANG = "unknown"
+    private const val MAX_ATTEMPTS_PER_PROVIDER = 2
+    private const val RETRY_DELAY_MS = 50L
+
+    @Volatile
+    private var lastNetworkException: Throwable? = null
 
     private val httpClient: HttpClient = HttpClient.newBuilder()
         .connectTimeout(Duration.ofSeconds(CONNECT_TIMEOUT_SECONDS))
@@ -129,6 +140,13 @@ object TranslationService {
         TranslationCache.put(result)
     }
 
+    fun evict(text: String, targetLang: String = getTargetLanguage()) {
+        val trimmed = text.trim()
+        val key = TranslationCache.cacheKey(trimmed, targetLang)
+        TranslationCache.evict(trimmed, targetLang)
+        failedRequests.remove(key)
+    }
+
     fun isInFlight(text: String, targetLang: String = getTargetLanguage()): Boolean {
         val key = TranslationCache.cacheKey(text.trim(), targetLang)
         return TranslationCache.isInFlight(key)
@@ -149,18 +167,20 @@ object TranslationService {
         }
 
         val targetLang = getTargetLanguage()
-        val cached = TranslationCache.get(trimmed, targetLang)
-        if (cached != null) {
-            callback(cached)
-            return
-        }
-
         val key = TranslationCache.cacheKey(trimmed, targetLang)
+
         if (forceRetry) {
-            TranslationCache.removeFailed(key)
-        } else if (TranslationCache.isCircuitBreakerOpen() || TranslationCache.isThrottled(key)) {
-            callback(null)
-            return
+            evict(trimmed, targetLang)
+        } else {
+            val cached = TranslationCache.get(trimmed, targetLang)
+            if (cached != null) {
+                callback(cached)
+                return
+            }
+            if (TranslationCache.isCircuitBreakerOpen() || TranslationCache.isThrottled(key)) {
+                callback(null)
+                return
+            }
         }
 
         val shouldFetch = TranslationCache.queueInFlight(key, callback)
@@ -242,106 +262,432 @@ object TranslationService {
         return texts.map { cachedMap[it] ?: TranslationResult(it, it, targetLang, targetLang, true) }
     }
 
-    private fun executeTranslation(
+    fun isSameLanguage(lang1: String?, lang2: String?): Boolean {
+        if (lang1.isNullOrBlank() || lang2.isNullOrBlank()) return false
+        val clean1 = lang1.trim().lowercase().substringBefore('_').substringBefore('-')
+        val clean2 = lang2.trim().lowercase().substringBefore('_').substringBefore('-')
+        val invalidLangs = setOf(UNKNOWN_LANG, AUTO_LANG)
+        if (clean1 in invalidLangs || clean2 in invalidLangs) {
+            return false
+        }
+        return clean1 == clean2
+    }
+
+    fun isUntranslatedFailure(result: TranslationResult): Boolean {
+        return isUntranslatedFailure(
+            result.originalText,
+            result.translatedText,
+            result.detectedLanguage,
+            result.targetLanguage,
+        )
+    }
+
+    fun isUntranslatedFailure(
+        originalText: String,
+        translatedText: String?,
+        detectedLang: String?,
+        targetLang: String,
+    ): Boolean {
+        if (translatedText == null) return true
+        if (isSameLanguage(detectedLang, targetLang)) return false
+        val origTrimmed = originalText.trim()
+        val transTrimmed = translatedText.trim()
+        if (origTrimmed.none { it.isLetter() }) return false
+        return origTrimmed.equals(transTrimmed, ignoreCase = true)
+    }
+
+    fun isBatchUntranslatedFailure(
+        originalTexts: List<String>,
+        translatedTexts: List<String>?,
+        detectedLang: String?,
+        targetLang: String,
+    ): Boolean {
+        if (translatedTexts == null || translatedTexts.size != originalTexts.size) return true
+        if (isSameLanguage(detectedLang, targetLang)) return false
+
+        val translatableIndices = originalTexts.indices.filter { originalTexts[it].any { ch -> ch.isLetter() } }
+        if (translatableIndices.isEmpty()) return false
+
+        val failedCount = translatableIndices.count { idx ->
+            originalTexts[idx].trim().equals(translatedTexts[idx].trim(), ignoreCase = true)
+        }
+        return failedCount == translatableIndices.size
+    }
+
+    fun getCandidateTranslators(
+        targetLang: String = getTargetLanguage(),
+    ): List<com.stellar.lang.plugin.TranslationPlugin> {
+        val active = PluginRegistry.getActiveTranslator()
+        val fallback = PluginRegistry.getFallbackTranslator(active)
+        return listOfNotNull(active, fallback).distinctBy { it.id }.filter { candidate ->
+            if (candidate === active) {
+                true
+            } else if (candidate is com.stellar.lang.plugin.onnx.OnnxTranslationPlugin) {
+                com.stellar.lang.plugin.onnx.OnnxModelManager.isTranslationModelReady(targetLang)
+            } else if (candidate is LibreTranslatePlugin) {
+                val host = getConfig().apiHost.value().trim()
+                host.isNotBlank() && !TranslationCache.isCircuitBreakerOpen()
+            } else {
+                true
+            }
+        }
+    }
+
+    private fun detectLanguage(text: String): String {
+        val detector = PluginRegistry.getActiveDetector()
+        return kotlinx.coroutines.runBlocking {
+            val detected = detector.detectLanguage(text)
+            if (!detected.isNullOrBlank() && detected != UNKNOWN_LANG) {
+                detected
+            } else {
+                runCatching {
+                    val fallback = PluginRegistry.getFallbackDetector(detector)
+                    if (fallback is com.stellar.lang.plugin.onnx.OnnxLanguageDetectorPlugin &&
+                        !com.stellar.lang.plugin.onnx.OnnxModelManager.isDetectionModelReady()
+                    ) {
+                        null
+                    } else {
+                        fallback?.detectLanguage(text)
+                    }
+                }.getOrNull() ?: UNKNOWN_LANG
+            }
+        }
+    }
+
+    @Suppress("ReturnCount", "NestedBlockDepth")
+    internal fun executeTranslation(
         text: String,
         targetLang: String,
     ): TranslationResult? {
-        val config = getConfig()
-        val translator = PluginRegistry.getActiveTranslator()
-        val detector = PluginRegistry.getActiveDetector()
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return null
+        if (trimmed.none { it.isLetter() }) {
+            return TranslationResult(
+                originalText = text,
+                translatedText = text,
+                detectedLanguage = targetLang,
+                targetLanguage = targetLang,
+                isSameLanguage = true,
+            )
+        }
 
-        if (translator is LibreTranslatePlugin && detector is LibreTranslatePlugin) {
-            return executeTranslation(text, config.apiHost.value(), config.apiKey.value(), targetLang)
+        return runCatching {
+            lastNetworkException = null
+            val candidates = getCandidateTranslators(targetLang)
+            var finalResult: TranslationResult? = null
+            var detected = UNKNOWN_LANG
+
+            for (candidate in candidates) {
+                var fatalException = false
+                for (attempt in 1..MAX_ATTEMPTS_PER_PROVIDER) {
+                    val outcome = runCatching {
+                        if (candidate is LibreTranslatePlugin) {
+                            executeTranslationWithProvider(candidate, trimmed, detected, targetLang)
+                        } else {
+                            if (detected == UNKNOWN_LANG) {
+                                detected = detectLanguage(trimmed)
+                            }
+                            if (isSameLanguage(detected, targetLang)) {
+                                TranslationResult(
+                                    originalText = text,
+                                    translatedText = text,
+                                    detectedLanguage = detected,
+                                    targetLanguage = targetLang,
+                                    isSameLanguage = true,
+                                )
+                            } else {
+                                executeTranslationWithProvider(candidate, trimmed, detected, targetLang)
+                            }
+                        }
+                    }.onFailure { ex ->
+                        if (isNonRetryableException(ex)) {
+                            fatalException = true
+                        }
+                        logger.warn(
+                            "Provider '{}' threw exception for '{}' (attempt {}/{}): {}",
+                            candidate.id,
+                            trimmed,
+                            attempt,
+                            MAX_ATTEMPTS_PER_PROVIDER,
+                            ex.message,
+                        )
+                    }.getOrNull()
+
+                    if (outcome != null) {
+                        finalResult = outcome
+                        break
+                    }
+
+                    if (fatalException || isNonRetryableException(lastNetworkException)) {
+                        break
+                    }
+
+                    if (attempt < MAX_ATTEMPTS_PER_PROVIDER) {
+                        logger.warn(
+                            "Provider '{}' failed or returned unchanged text for '{}' (attempt {}/{}). Retrying...",
+                            candidate.id,
+                            trimmed,
+                            attempt,
+                            MAX_ATTEMPTS_PER_PROVIDER,
+                        )
+                        sleepQuietly(RETRY_DELAY_MS)
+                    }
+                }
+
+                if (finalResult != null) {
+                    if (candidate !== candidates.first()) {
+                        logger.info("Successfully translated '{}' using fallback provider '{}'", trimmed, candidate.id)
+                    }
+                    break
+                }
+
+                if (fatalException || isNonRetryableException(lastNetworkException)) {
+                    break
+                }
+
+                logger.warn(
+                    "Provider '{}' exhausted all retries for '{}'. Attempting fallback provider if available...",
+                    candidate.id,
+                    trimmed,
+                )
+            }
+
+            finalResult
+        }.onFailure { ex ->
+            logger.warn("Translation failed for '{}': {}", text, ex.message)
+        }.getOrNull()
+    }
+
+    private fun executeTranslationWithProvider(
+        provider: com.stellar.lang.plugin.TranslationPlugin,
+        text: String,
+        detectedLang: String,
+        targetLang: String,
+    ): TranslationResult? {
+        val config = getConfig()
+        if (provider is LibreTranslatePlugin) {
+            val res = executeTranslation(text, config.apiHost.value(), config.apiKey.value(), targetLang)
+            return if (res != null && !isUntranslatedFailure(res)) res else null
         }
 
         return kotlinx.coroutines.runBlocking {
-            runCatching {
-                val detected = detector.detectLanguage(text) ?: UNKNOWN_LANG
-                val isSame = detected.equals(targetLang, ignoreCase = true)
-                if (isSame) {
-                    TranslationResult(
-                        originalText = text,
-                        translatedText = text,
-                        detectedLanguage = detected,
-                        targetLanguage = targetLang,
-                        isSameLanguage = true,
-                    )
-                } else {
-                    val translated = translator.translate(text, detected, targetLang)
-                    if (translated != null) {
-                        TranslationResult(
-                            originalText = text,
-                            translatedText = translated,
-                            detectedLanguage = detected,
-                            targetLanguage = targetLang,
-                            isSameLanguage = false,
-                        )
-                    } else if (translator is com.stellar.lang.plugin.onnx.OnnxTranslationPlugin) {
-                        executeTranslation(text, config.apiHost.value(), config.apiKey.value(), targetLang)
-                    } else {
-                        null
-                    }
-                }
-            }.onFailure { ex ->
-                logger.warn("Translation failed for '{}': {}", text, ex.message)
-            }.getOrNull()
+            val effectiveDetected = if (detectedLang == UNKNOWN_LANG) {
+                detectLanguage(text).takeIf { it != UNKNOWN_LANG }
+            } else {
+                detectedLang
+            }
+            val translated = provider.translate(
+                text,
+                effectiveDetected,
+                targetLang,
+            )
+            if (translated != null && !isUntranslatedFailure(text, translated, effectiveDetected, targetLang)) {
+                val isSame = isSameLanguage(effectiveDetected, targetLang)
+                TranslationResult(
+                    originalText = text,
+                    translatedText = translated,
+                    detectedLanguage = effectiveDetected ?: UNKNOWN_LANG,
+                    targetLanguage = targetLang,
+                    isSameLanguage = isSame,
+                )
+            } else {
+                null
+            }
         }
     }
 
-    private fun executeBatchTranslation(
+    @Suppress("ReturnCount", "NestedBlockDepth")
+    internal fun executeBatchTranslation(
         texts: List<String>,
         targetLang: String,
     ): List<TranslationResult>? {
-        val config = getConfig()
-        val translator = PluginRegistry.getActiveTranslator()
-        val detector = PluginRegistry.getActiveDetector()
+        if (texts.isEmpty()) return emptyList()
 
-        if (translator is LibreTranslatePlugin && detector is LibreTranslatePlugin) {
-            return executeBatchTranslation(texts, config.apiHost.value(), config.apiKey.value(), targetLang)
+        if (texts.all { it.none { ch -> ch.isLetter() } }) {
+            return texts.map {
+                TranslationResult(
+                    originalText = it,
+                    translatedText = it,
+                    detectedLanguage = targetLang,
+                    targetLanguage = targetLang,
+                    isSameLanguage = true,
+                )
+            }
+        }
+
+        return runCatching {
+            lastNetworkException = null
+            val candidates = getCandidateTranslators(targetLang)
+            var finalResults: List<TranslationResult>? = null
+            var detected = UNKNOWN_LANG
+
+            for (candidate in candidates) {
+                var fatalException = false
+                for (attempt in 1..MAX_ATTEMPTS_PER_PROVIDER) {
+                    val results = runCatching {
+                        if (candidate is LibreTranslatePlugin) {
+                            executeBatchTranslationWithProvider(candidate, texts, detected, targetLang)
+                        } else {
+                            if (detected == UNKNOWN_LANG) {
+                                val sampleText = texts.firstOrNull { it.any { ch -> ch.isLetter() } } ?: texts.first()
+                                detected = detectLanguage(sampleText)
+                            }
+                            if (isSameLanguage(detected, targetLang)) {
+                                texts.map {
+                                    TranslationResult(
+                                        originalText = it,
+                                        translatedText = it,
+                                        detectedLanguage = detected,
+                                        targetLanguage = targetLang,
+                                        isSameLanguage = true,
+                                    )
+                                }
+                            } else {
+                                executeBatchTranslationWithProvider(candidate, texts, detected, targetLang)
+                            }
+                        }
+                    }.onFailure { ex ->
+                        if (isNonRetryableException(ex)) {
+                            fatalException = true
+                        }
+                        logger.warn(
+                            "Batch provider '{}' threw on attempt {}/{}: {}",
+                            candidate.id,
+                            attempt,
+                            MAX_ATTEMPTS_PER_PROVIDER,
+                            ex.message,
+                        )
+                    }.getOrNull()
+
+                    if (results != null) {
+                        finalResults = results
+                        break
+                    }
+
+                    if (fatalException || isNonRetryableException(lastNetworkException)) {
+                        break
+                    }
+
+                    if (attempt < MAX_ATTEMPTS_PER_PROVIDER) {
+                        logger.warn(
+                            "Batch provider '{}' failed on attempt {}/{}. Retrying...",
+                            candidate.id,
+                            attempt,
+                            MAX_ATTEMPTS_PER_PROVIDER,
+                        )
+                        sleepQuietly(RETRY_DELAY_MS)
+                    }
+                }
+
+                if (finalResults != null) {
+                    if (candidate !== candidates.first()) {
+                        logger.info("Batch translation succeeded using fallback provider '{}'", candidate.id)
+                    }
+                    break
+                }
+
+                if (fatalException || isNonRetryableException(lastNetworkException)) {
+                    break
+                }
+
+                logger.warn(
+                    "Batch provider '{}' exhausted all retries. Attempting fallback provider if available...",
+                    candidate.id,
+                )
+            }
+
+            if (finalResults != null) {
+                finalResults = finalResults.map { res ->
+                    if (isUntranslatedFailure(res)) {
+                        val singleFallback = executeTranslation(res.originalText, targetLang)
+                        if (singleFallback != null && !isUntranslatedFailure(singleFallback)) {
+                            singleFallback
+                        } else {
+                            res
+                        }
+                    } else {
+                        res
+                    }
+                }
+            }
+
+            finalResults
+        }.onFailure { ex ->
+            logger.warn("Batch translation failed: {}", ex.message)
+        }.getOrNull()
+    }
+
+    private fun executeBatchTranslationWithProvider(
+        provider: com.stellar.lang.plugin.TranslationPlugin,
+        texts: List<String>,
+        detectedLang: String,
+        targetLang: String,
+    ): List<TranslationResult>? {
+        val config = getConfig()
+        if (provider is LibreTranslatePlugin) {
+            val results = executeBatchTranslation(texts, config.apiHost.value(), config.apiKey.value(), targetLang)
+            val effectiveDetected = results?.firstOrNull()?.detectedLanguage ?: detectedLang
+            val isFailure = results == null ||
+                isBatchUntranslatedFailure(texts, results.map { it.translatedText }, effectiveDetected, targetLang)
+            return if (isFailure) null else results
         }
 
         return kotlinx.coroutines.runBlocking {
-            runCatching {
-                val detected = detector.detectLanguage(texts.firstOrNull() ?: "") ?: UNKNOWN_LANG
-                val isSame = detected.equals(targetLang, ignoreCase = true)
-                if (isSame) {
-                    texts.map {
-                        TranslationResult(it, it, detected, targetLang, true)
-                    }
-                } else {
-                    val translatedList = translator.translateBatch(texts, detected, targetLang)
-                    if (isBatchSuccess(translator, translatedList, texts)) {
-                        texts.mapIndexed { index, original ->
-                            val trans = translatedList?.getOrElse(index) { original } ?: original
-                            TranslationResult(
-                                originalText = original,
-                                translatedText = trans,
-                                detectedLanguage = detected,
-                                targetLanguage = targetLang,
-                                isSameLanguage = false,
-                            )
-                        }
-                    } else if (translator is com.stellar.lang.plugin.onnx.OnnxTranslationPlugin) {
-                        executeBatchTranslation(texts, config.apiHost.value(), config.apiKey.value(), targetLang)
-                    } else {
-                        null
-                    }
+            val effectiveDetected = if (detectedLang == UNKNOWN_LANG) {
+                val sample = texts.firstOrNull { it.any { ch -> ch.isLetter() } } ?: texts.first()
+                detectLanguage(sample).takeIf { it != UNKNOWN_LANG }
+            } else {
+                detectedLang
+            }
+            val translatedList = provider.translateBatch(
+                texts,
+                effectiveDetected,
+                targetLang,
+            )
+            val isFailure = translatedList == null ||
+                isBatchUntranslatedFailure(texts, translatedList, effectiveDetected, targetLang)
+            if (isFailure) {
+                null
+            } else {
+                texts.mapIndexed { index, original ->
+                    val trans = translatedList.getOrElse(index) { original }
+                    val isSame = isSameLanguage(effectiveDetected, targetLang)
+                    TranslationResult(
+                        originalText = original,
+                        translatedText = trans,
+                        detectedLanguage = effectiveDetected ?: UNKNOWN_LANG,
+                        targetLanguage = targetLang,
+                        isSameLanguage = isSame,
+                    )
                 }
-            }.onFailure { ex ->
-                logger.warn("Batch translation failed: {}", ex.message)
-            }.getOrNull()
+            }
         }
     }
 
-    private fun isBatchSuccess(
-        translator: com.stellar.lang.plugin.TranslationPlugin,
-        translatedList: List<String>?,
-        originalTexts: List<String>,
-    ): Boolean {
-        if (translatedList == null) return false
-        val isFailedOnnx = translator is com.stellar.lang.plugin.onnx.OnnxTranslationPlugin &&
-            translatedList == originalTexts
-        return !isFailedOnnx
+    private fun isNonRetryableException(ex: Throwable?): Boolean {
+        var current: Throwable? = ex
+        while (current != null) {
+            val isFatal = when (current) {
+                is java.net.ConnectException,
+                is java.net.UnknownHostException,
+                is java.net.PortUnreachableException,
+                -> true
+                else -> false
+            }
+            if (isFatal) {
+                return true
+            }
+            current = current.cause
+        }
+        return false
+    }
+
+    private fun sleepQuietly(millis: Long) {
+        try {
+            Thread.sleep(millis)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
     }
 
     fun translateBatchAsync(texts: List<String>, callback: (List<TranslationResult>?) -> Unit) {
@@ -371,7 +717,18 @@ object TranslationService {
 
             val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
             if (response.statusCode() in HTTP_OK_MIN..HTTP_OK_MAX) {
-                parseSingleResponse(response.body(), text, targetLang)
+                lastNetworkException = null
+                val parsed = parseSingleResponse(response.body(), text, targetLang)
+                if (parsed != null && isUntranslatedFailure(parsed)) {
+                    logger.warn(
+                        "LibreTranslate returned untranslated text for '{}' despite detected language '{}'",
+                        text,
+                        parsed.detectedLanguage,
+                    )
+                    null
+                } else {
+                    parsed
+                }
             } else {
                 if (response.statusCode() == HTTP_TOO_MANY_REQUESTS) {
                     TranslationCache.tripCircuitBreaker()
@@ -380,6 +737,7 @@ object TranslationService {
                 null
             }
         }.getOrElse { ex ->
+            lastNetworkException = ex
             val errorDetail = ex.message ?: ex::class.simpleName ?: ex.toString()
             logger.warn("LibreTranslate request failed for '{}': {}", text, errorDetail)
             null
@@ -406,6 +764,7 @@ object TranslationService {
 
             val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
             if (response.statusCode() in HTTP_OK_MIN..HTTP_OK_MAX) {
+                lastNetworkException = null
                 parseBatchResponse(response.body(), texts, targetLang)
             } else {
                 if (response.statusCode() == HTTP_TOO_MANY_REQUESTS) {
@@ -414,6 +773,7 @@ object TranslationService {
                 null
             }
         }.onFailure { ex ->
+            lastNetworkException = ex
             val errorDetail = ex.message ?: ex::class.simpleName ?: ex.toString()
             logger.warn("LibreTranslate batch request failed for {} items: {}", texts.size, errorDetail)
         }.getOrNull()
@@ -463,7 +823,7 @@ object TranslationService {
                 transElem.asString
             }
             val detected = parseDetectedLanguage(json)
-            val isSame = detected.equals(targetLang, ignoreCase = true)
+            val isSame = isSameLanguage(detected, targetLang)
             TranslationResult(
                 originalText = originalText,
                 translatedText = translated,
@@ -492,7 +852,7 @@ object TranslationService {
                 } else {
                     defaultDetected
                 }
-                val isSame = detected.equals(targetLang, ignoreCase = true)
+                val isSame = isSameLanguage(detected, targetLang)
                 val result = TranslationResult(orig, trans, detected, targetLang, isSame)
                 TranslationCache.put(result)
                 result

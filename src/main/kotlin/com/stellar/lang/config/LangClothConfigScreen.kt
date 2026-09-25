@@ -474,11 +474,19 @@ object LangClothConfigScreen {
             .setSaveConsumer { value -> config.translateItems.setValue(value, true) }
             .build()
 
+        val containersEntry = entries
+            .startBooleanToggle(Component.literal("Translate Containers"), config.translateContainers.value())
+            .setDefaultValue(true)
+            .setTooltip(Component.literal("Translates renamed container and inventory labels (chests, etc.)"))
+            .setSaveConsumer { value -> config.translateContainers.setValue(value, true) }
+            .build()
+
         category.addEntry(chatEntry)
         category.addEntry(signsEntry)
         category.addEntry(booksEntry)
         category.addEntry(entitiesEntry)
         category.addEntry(itemsEntry)
+        category.addEntry(containersEntry)
     }
 
     private fun buildControlsCategory(builder: ConfigBuilder, entries: ConfigEntryBuilder, config: StellarLangConfig) {

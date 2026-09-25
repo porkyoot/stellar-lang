@@ -51,8 +51,14 @@ class StellarLangConfig : ReflectiveConfig() {
     @Comment("Enable translation of item display and custom names")
     val translateItems: TrackedValue<Boolean> = value(true)
 
+    @Comment("Enable translation of renamed container and inventory labels")
+    val translateContainers: TrackedValue<Boolean> = value(true)
+
     @Comment("GLFW key code to show original text on signs and entities (default: COMMA = 44)")
     val showOriginalKey: TrackedValue<Int> = value(Key.KEY_COMMA)
+
+    @Comment("GLFW key code to retry/refresh translation for targeted object (default: PERIOD = 46)")
+    val retryTargetKey: TrackedValue<Int> = value(Key.KEY_PERIOD)
 
     @Comment("Enable persistent disk caching of translations across game sessions")
     val cacheToDisk: TrackedValue<Boolean> = value(true)

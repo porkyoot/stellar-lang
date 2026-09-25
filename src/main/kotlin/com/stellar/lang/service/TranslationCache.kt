@@ -96,6 +96,16 @@ object TranslationCache {
         }
     }
 
+    fun evict(text: String, targetLang: String) {
+        ensureInitialized()
+        val key = cacheKey(text, targetLang)
+        synchronized(cacheLock) {
+            lruCache.remove(key)
+            isDirty = true
+        }
+        failedAttempts.remove(key)
+    }
+
     fun size(): Int {
         synchronized(cacheLock) {
             return lruCache.size

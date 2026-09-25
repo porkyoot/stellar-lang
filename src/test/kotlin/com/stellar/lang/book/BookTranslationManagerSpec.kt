@@ -11,6 +11,7 @@ import net.minecraft.network.chat.Component
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
+@Suppress("LargeClass")
 class BookTranslationManagerSpec : FunSpec({
     beforeEach {
         TranslationService.clearCache()
@@ -291,5 +292,67 @@ class BookTranslationManagerSpec : FunSpec({
         finalRes.access?.pageCount shouldBe 2
         finalRes.access?.getPage(0)?.string shouldBe "Page one"
         finalRes.access?.getPage(1)?.string shouldBe "Page two"
+    }
+
+    test("refreshBook clears cache and re-translates book") {
+        val pages = listOf(Component.literal("Kapitel 1"), Component.literal("Kapitel 2"))
+        val bookAccess = BookViewScreen.BookAccess(pages)
+
+        val emptyAccess = BookViewScreen.BookAccess(emptyList())
+        BookTranslationManager.refreshBook(emptyAccess) shouldBe false
+
+        val blankAccess = BookViewScreen.BookAccess(listOf(Component.literal("   "), Component.literal("")))
+        BookTranslationManager.refreshBook(blankAccess) shouldBe false
+
+        BookTranslationManager.refreshBook(bookAccess) shouldBe true
+
+        BookTranslationManager.refreshBook(net.minecraft.world.item.ItemStack.EMPTY) shouldBe false
+
+        val unsafeField = sun.misc.Unsafe::class.java.getDeclaredField("theUnsafe")
+        unsafeField.isAccessible = true
+        val unsafe = unsafeField.get(null) as sun.misc.Unsafe
+        val dummyStack = unsafe.allocateInstance(net.minecraft.world.item.ItemStack::class.java)
+            as net.minecraft.world.item.ItemStack
+        BookTranslationManager.refreshBook(dummyStack) shouldBe false
+    }
+
+    test("createFallbackResult branches in BookTranslationManager") {
+        val method = BookTranslationManager::class.java.getDeclaredMethod(
+            "createFallbackResult",
+            List::class.java,
+            List::class.java,
+            String::class.java,
+        )
+        method.isAccessible = true
+
+        val sampleText = "This is the first chapter in English"
+        TranslationCache.put(
+            TranslationResult(
+                originalText = sampleText,
+                translatedText = sampleText,
+                detectedLanguage = "en",
+                targetLanguage = "en",
+                isSameLanguage = true,
+            ),
+        )
+
+        val res1 = method.invoke(
+            BookTranslationManager,
+            listOf(Component.literal(sampleText)),
+            listOf(sampleText),
+            "en",
+        ) as BookTranslationResult
+        res1.isSameLanguage shouldBe true
+        res1.isFailed shouldBe false
+        res1.access shouldBe null
+
+        val res2 = method.invoke(
+            BookTranslationManager,
+            listOf(Component.literal("   ")),
+            listOf("   "),
+            "en",
+        ) as BookTranslationResult
+        res2.detectedLanguage shouldBe "unknown"
+        res2.isFailed shouldBe true
     }
 })

@@ -15,7 +15,10 @@
     "ChatScreenMixin",
     "SignBlockEntityMixin",
     "ClientLevelMixin",
-    "EntityMixin"
+    "EntityMixin",
+    "KeyboardHandlerMixin",
+    "OptionsMixin",
+    "AbstractContainerScreenMixin"
   ],
   "injectors": {
     "defaultRequire": 1
