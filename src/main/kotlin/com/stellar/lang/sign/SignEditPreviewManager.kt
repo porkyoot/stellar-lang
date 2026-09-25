@@ -8,6 +8,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 object SignEditPreviewManager {
     internal const val DEBOUNCE_MS = 250L
+    internal const val FAILED_RETRY_COOLDOWN_MS = 5_000L
     internal const val PREVIEW_LINE_CHARS = 20
 
     @Volatile
@@ -52,12 +53,17 @@ object SignEditPreviewManager {
             hasFailed.set(true)
         }
 
+        val isFailedState = hasFailed.get()
+        val waitMs = if (isFailedState) FAILED_RETRY_COOLDOWN_MS else DEBOUNCE_MS
+
         if (trimmed != lastRequestedText) {
             lastRequestedText = trimmed
             lastRequestTime = System.currentTimeMillis()
-        } else if (!isTranslating.get() && System.currentTimeMillis() - lastRequestTime >= DEBOUNCE_MS) {
+        } else if (!isTranslating.get() && System.currentTimeMillis() - lastRequestTime >= waitMs) {
+            lastRequestTime = System.currentTimeMillis()
             isTranslating.set(true)
-            TranslationService.translateAsync(trimmed) { result ->
+            val force = isFailedState
+            TranslationService.translateAsync(trimmed, forceRetry = force) { result ->
                 isTranslating.set(false)
                 if (result != null) {
                     currentTranslatedText = result.translatedText

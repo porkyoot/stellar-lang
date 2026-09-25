@@ -31,6 +31,34 @@ private const val PREVIEW_SCALE_Y = 1.16f
 private const val HALF_PAGE = 96
 
 /**
+ * Layout constants for the dual book display used by BookViewScreenMixin.
+ */
+internal object BookLayoutConstants {
+    const val BOOK_IMAGE_WIDTH = 192
+    const val PREVIEW_SCALE_X = 1.20f
+    const val PREVIEW_SCALE_Y = 1.16f
+    const val MIN_HEADER_Y = 4
+    const val HEADER_OFFSET_Y = 12
+    const val MIN_SCREEN_HEIGHT_FOR_HEADER = 240
+    const val HEADER_GRAY_COLOR = -0x555556
+    const val HEADER_WHITE_COLOR = -0x1
+    const val BOTTOM_BUTTON_MARGIN = 24
+    const val BUTTON_PADDING_Y = 6
+    const val BUTTON_PAGE_FORWARD_X = 116
+    const val BUTTON_PAGE_BACK_X = 43
+    const val BUTTON_PAGE_Y = 157
+    const val SCREEN_HALF_DIVISOR = 2.0f
+    const val SCREEN_QUARTER_DIVISOR = 4.0f
+    const val HALF_ORIGINAL_BOOK = 96
+    const val MIN_OFFSET = 95f
+    const val MAX_OFFSET = 130f
+    const val OFFSET_WIDTH_MARGIN = 115f
+    const val MIN_OFFSET_FALLBACK = 60f
+    const val TOP_MARGIN_WITH_HEADER = 16
+    const val BOOK_RETRY_INTERVAL_MS = 15_000L
+}
+
+/**
  * Non-editable translated book widget rendered on the side of BookViewScreen.
  * Supports wider pages, overflow display, and mouse wheel scrolling.
  */

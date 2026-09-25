@@ -233,5 +233,63 @@ class BookTranslationManagerSpec : FunSpec({
         finalRes.isSameLanguage shouldBe true
         finalRes.isFailed shouldBe false
         finalRes.access shouldBe null
+        finalRes.detectedLanguage shouldBe "en"
+        finalRes.targetLanguage shouldBe "en"
+    }
+
+    test("isValidTranslation checks same language and blank translated text") {
+        val method = BookTranslationManager::class.java.getDeclaredMethod(
+            "isValidTranslation",
+            TranslationResult::class.java,
+        ).apply { isAccessible = true }
+
+        val res1 = TranslationResult("Hello", "Hello", "en", "en", true)
+        val res2 = TranslationResult("Bonjour", "   ", "fr", "en", false)
+        val res3 = TranslationResult("Bonjour", "Hello", "fr", "en", false)
+
+        method.invoke(BookTranslationManager, res1) as Boolean shouldBe false
+        method.invoke(BookTranslationManager, res2) as Boolean shouldBe false
+        method.invoke(BookTranslationManager, res3) as Boolean shouldBe true
+    }
+
+    test("createFallbackResult creates fallback with detected language") {
+        val method = BookTranslationManager::class.java.getDeclaredMethod(
+            "createFallbackResult",
+            List::class.java,
+            List::class.java,
+            String::class.java,
+        ).apply { isAccessible = true }
+        val pages = listOf(Component.literal("Page 1"))
+        val texts = listOf("Page 1")
+        val fallback = method.invoke(BookTranslationManager, pages, texts, "fr") as BookTranslationResult
+        fallback.targetLanguage shouldBe "fr"
+        fallback.isFailed shouldBe true
+        fallback.isSameLanguage shouldBe false
+        fallback.access shouldNotBe null
+
+        com.stellar.lang.plugin.PluginRegistry.getActiveDetector() shouldNotBe null
+        com.stellar.lang.plugin.PluginRegistry.getActiveTranslator() shouldNotBe null
+    }
+
+    test("translatePagesDetailedAsync translates list of strings") {
+        val originalPages = listOf("Page une", "Page deux")
+        val targetLang = TranslationService.getTargetLanguage()
+        TranslationCache.put(TranslationResult("Page une", "Page one", "fr", targetLang, false))
+        TranslationCache.put(TranslationResult("Page deux", "Page two", "fr", targetLang, false))
+
+        val latch = CountDownLatch(1)
+        var res: BookTranslationResult? = null
+        BookTranslationManager.translatePagesDetailedAsync(originalPages) { result ->
+            res = result
+            latch.countDown()
+        }
+        latch.await(2, TimeUnit.SECONDS) shouldBe true
+        val finalRes = requireNotNull(res)
+        finalRes.isSameLanguage shouldBe false
+        finalRes.isFailed shouldBe false
+        finalRes.access shouldNotBe null
+        finalRes.access?.pageCount shouldBe 2
+        finalRes.access?.getPage(0)?.string shouldBe "Page one"
+        finalRes.access?.getPage(1)?.string shouldBe "Page two"
     }
 })

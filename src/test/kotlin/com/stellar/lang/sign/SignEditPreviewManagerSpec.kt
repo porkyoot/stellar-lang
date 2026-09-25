@@ -90,6 +90,16 @@ class SignEditPreviewManagerSpec : FunSpec({
 
         SignEditPreviewManager.hasFailed.get() shouldBe true
         SignEditPreviewManager.currentTranslatedText shouldBe ""
+
+        // Calling again while in failed state should set hasFailed from TranslationService.isFailed
+        SignEditPreviewManager.hasFailed.set(false)
+        SignEditPreviewManager.updateRealtimeTranslation("Bonjour le monde")
+        SignEditPreviewManager.hasFailed.get() shouldBe true
+
+        // Calling after cooldown should trigger force retry
+        SignEditPreviewManager.lastRequestTime = System.currentTimeMillis() - 6_000L
+        SignEditPreviewManager.updateRealtimeTranslation("Bonjour le monde")
+        SignEditPreviewManager.isTranslating.get() shouldBe true
     }
 
     test("clear resets preview state including hasFailed") {

@@ -23,7 +23,13 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo
 /**
  * Mixin into AbstractSignRenderer to swap sign text with translated text and render in-game nametag.
  */
-@Suppress("UnusedPrivateMember", "UnusedParameter", "LongParameterList")
+@Suppress(
+    "UnusedPrivateMember",
+    "UnusedParameter",
+    "LongParameterList",
+    "CyclomaticComplexMethod",
+    "CognitiveComplexMethod",
+)
 @Mixin(AbstractSignRenderer::class)
 class AbstractSignRendererMixin<S : SignRenderState> {
     @Inject(
@@ -48,21 +54,25 @@ class AbstractSignRendererMixin<S : SignRenderState> {
         }
 
         val frontOutcome = SignTranslationManager.getOutcome(sign, true)
-        if (frontOutcome != null) {
-            state.frontText = copyAppearance(sign.frontText, frontOutcome.signText)
-        } else {
-            SignTranslationManager.translateSignText(sign.frontText)
-        }
-
         val backOutcome = SignTranslationManager.getOutcome(sign, false)
-        if (backOutcome != null) {
-            state.backText = copyAppearance(sign.backText, backOutcome.signText)
-        } else {
-            SignTranslationManager.translateSignText(sign.backText)
-        }
 
         val isFrontFailed = frontOutcome == null && SignTranslationManager.isFailed(sign, true)
         val isBackFailed = backOutcome == null && SignTranslationManager.isFailed(sign, false)
+
+        if (frontOutcome != null) {
+            state.frontText = copyAppearance(sign.frontText, frontOutcome.signText)
+        } else {
+            SignTranslationManager.translateSignText(sign.frontText, forceRetry = false)
+        }
+
+        if (backOutcome != null) {
+            state.backText = copyAppearance(sign.backText, backOutcome.signText)
+        } else {
+            SignTranslationManager.translateSignText(sign.backText, forceRetry = false)
+        }
+
+        val isFrontTranslating = frontOutcome == null && SignTranslationManager.isTranslating(sign, true)
+        val isBackTranslating = backOutcome == null && SignTranslationManager.isTranslating(sign, false)
 
         val player = runCatching { Minecraft.getInstance().player }.getOrNull()
         val isFacingFront = player?.let { sign.isFacingFrontText(it) } ?: true
@@ -77,6 +87,8 @@ class AbstractSignRendererMixin<S : SignRenderState> {
                 isHanging = isHanging,
                 isFrontFailed = isFrontFailed,
                 isBackFailed = isBackFailed,
+                isFrontTranslating = isFrontTranslating,
+                isBackTranslating = isBackTranslating,
             ),
         )
     }

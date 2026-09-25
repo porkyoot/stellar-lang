@@ -1,3 +1,5 @@
+@file:Suppress("LargeClass")
+
 package com.stellar.lang.plugin.onnx
 
 import com.stellar.core.config.ConfigManager
@@ -47,13 +49,16 @@ class OnnxPluginSpec : FunSpec({
 
         val translator = OnnxTranslationPlugin()
         val translated = translator.translate("Hello world", "en", "es")
-        translated shouldBe null
+        translated shouldBe "hola mundo"
         // Second call exercises session caching hit
         val cachedTrans = translator.translate("Hello world 2", "en", "es")
-        cachedTrans shouldBe null
+        cachedTrans shouldBe "hola mundo dos"
 
         val batch = translator.translateBatch(listOf("Hello", "World"), "en", "es")
-        batch shouldBe listOf("Hello", "World")
+        batch shouldBe listOf("hola", "mundo")
+
+        OnnxInferenceEngine.isTranslationModelGenerative("es") shouldBe true
+        OnnxInferenceEngine.isTranslationModelGenerative("non_existent") shouldBe false
 
         OnnxInferenceEngine.resetSessions()
     }
@@ -107,6 +112,26 @@ class OnnxPluginSpec : FunSpec({
 
         val punctuationParts = OnnxWordPieceTokenizer.splitWordsAndPunctuation("hello, world! 123")
         punctuationParts shouldBe listOf("hello", ",", "world", "!", "123")
+
+        val detokVocab = mapOf(
+            "[UNK]" to 0,
+            "[CLS]" to 1,
+            "[SEP]" to 2,
+            "[PAD]" to 3,
+            "hello" to 10,
+            "##world" to 11,
+            "!" to 12,
+            "\u2581salut" to 13,
+            "\u2581monde" to 14,
+        )
+        val decodedWordPiece = OnnxWordPieceTokenizer.detokenize(longArrayOf(1L, 10L, 11L, 12L, 2L), detokVocab)
+        decodedWordPiece shouldBe "helloworld!"
+
+        val decodedSp = OnnxWordPieceTokenizer.detokenize(longArrayOf(1L, 13L, 14L, 2L), detokVocab)
+        decodedSp shouldBe "salut monde"
+
+        val decodedEmpty = OnnxWordPieceTokenizer.detokenize(longArrayOf(1L, 2L, 3L), detokVocab)
+        decodedEmpty shouldBe ""
     }
 
     test("OnnxLanguageDetectorPlugin detects French accurately with real tokenizer") {
@@ -241,5 +266,185 @@ class OnnxPluginSpec : FunSpec({
         translator.translate("Bonjour le monde", "fr", "en") shouldBe null
 
         OnnxModelManager.reset()
+    }
+
+    test("OnnxWordPieceTokenizer detokenize handles all branches") {
+        val vocab = mapOf(
+            "[PAD]" to 0,
+            "[UNK]" to 1,
+            "[CLS]" to 2,
+            "[SEP]" to 3,
+            "<pad>" to 4,
+            "<s>" to 5,
+            "</s>" to 6,
+            "<unk>" to 7,
+            "hello" to 8,
+            "world" to 9,
+            "play" to 10,
+            "##ing" to 11,
+            "\u2581start" to 12,
+            "\u2581next" to 13,
+            "." to 14,
+            "!" to 15,
+        )
+
+        // Empty tokens
+        OnnxWordPieceTokenizer.detokenize(longArrayOf(), vocab) shouldBe ""
+
+        // Special tokens ignored
+        OnnxWordPieceTokenizer.detokenize(longArrayOf(2L, 4L, 5L, 6L, 7L, 3L), vocab) shouldBe ""
+
+        // Unknown token ID ignored
+        OnnxWordPieceTokenizer.detokenize(longArrayOf(999L), vocab) shouldBe ""
+
+        // WordPiece subtoken joining
+        OnnxWordPieceTokenizer.detokenize(longArrayOf(10L, 11L), vocab) shouldBe "playing"
+
+        // SentencePiece prefix joining
+        OnnxWordPieceTokenizer.detokenize(longArrayOf(12L, 13L), vocab) shouldBe "start next"
+
+        // Standard words and punctuation
+        OnnxWordPieceTokenizer.detokenize(longArrayOf(8L, 9L, 14L, 15L), vocab) shouldBe "hello world.!"
+    }
+
+    test("OnnxInferenceEngine isTranslationModelGenerative returns false for missing or non-generative models") {
+        OnnxInferenceEngine.isTranslationModelGenerative("missing_lang") shouldBe false
+        OnnxInferenceEngine.isTranslationModelGenerative("en") shouldBe false
+    }
+
+    test("OnnxInferenceEngine and OnnxTranslationPlugin translate text through ONNX model") {
+        val testModelsDir = java.io.File("src/test/resources/test_models")
+        val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")!!
+        config.onnxModelDir.setValue(testModelsDir.absolutePath, false)
+        OnnxInferenceEngine.resetSessions()
+
+        // Verify model is generative
+        OnnxInferenceEngine.isTranslationModelGenerative("es") shouldBe true
+
+        // Direct inference engine translation
+        val translated = OnnxInferenceEngine.translate("hello world", "en", "es")
+        translated shouldBe "hola mundo"
+
+        val translatedHello = OnnxInferenceEngine.translate("hello", "en", "es")
+        translatedHello shouldBe "hola"
+
+        val translatedWorld = OnnxInferenceEngine.translate("world", "en", "es")
+        translatedWorld shouldBe "mundo"
+
+        // OnnxTranslationPlugin single and batch translation through model
+        val plugin = OnnxTranslationPlugin()
+        val pluginRes = plugin.translate("hello world", "en", "es")
+        pluginRes shouldBe "hola mundo"
+
+        val batchRes = plugin.translateBatch(listOf("hello", "world", "2"), "en", "es")
+        batchRes shouldBe listOf("hola", "mundo", "dos")
+
+        OnnxInferenceEngine.resetSessions()
+    }
+
+    test("OnnxInferenceEngine resetEnvironment, validation, blank inputs and thread configuration") {
+        OnnxInferenceEngine.translate("", "en", "es") shouldBe null
+        OnnxInferenceEngine.translate("   ", "en", "es") shouldBe null
+        OnnxInferenceEngine.detectLanguage("") shouldBe null
+        OnnxInferenceEngine.detectLanguage("   ") shouldBe null
+
+        val nonExistent = java.io.File("build/non_existent.onnx")
+        OnnxInferenceEngine.validateModel(nonExistent) shouldBe false
+
+        val tinyFile = java.io.File.createTempFile("tiny", ".onnx").apply {
+            writeBytes(ByteArray(10))
+            deleteOnExit()
+        }
+        OnnxInferenceEngine.validateModel(tinyFile) shouldBe false
+
+        val validModel = java.io.File("src/test/resources/test_models/detection/model.onnx")
+        OnnxInferenceEngine.validateModel(validModel) shouldBe true
+
+        val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")!!
+        config.onnxExecutionThreads.setValue(4, false)
+
+        OnnxInferenceEngine.isEnvironmentAvailable() shouldBe true
+        OnnxInferenceEngine.resetEnvironment()
+        OnnxInferenceEngine.isEnvironmentAvailable() shouldBe true
+    }
+
+    test("OnnxWordPieceTokenizer SentencePiece tokenization and array vocab loading") {
+        val spVocab = mapOf(
+            "</s>" to 0,
+            "<unk>" to 1,
+            "\u2581hello" to 10,
+            "\u2581world" to 11,
+            "!" to 12,
+        )
+        OnnxWordPieceTokenizer.isSentencePiece(spVocab) shouldBe true
+        val tokens = OnnxWordPieceTokenizer.tokenizeSentencePiece("hello world!", 10, spVocab)
+        tokens shouldBe longArrayOf(10L, 11L, 12L, 0L)
+
+        val unkTokens = OnnxWordPieceTokenizer.tokenizeSentencePiece("xyz", 10, spVocab)
+        unkTokens shouldBe longArrayOf(1L, 1L, 1L, 1L, 0L)
+
+        val arrayVocabFile = java.io.File.createTempFile("array_vocab", ".json").apply {
+            writeText("""{"model": {"vocab": [["</s>", 0.0], ["<unk>", 0.0], ["\u2581hi", -1.0]]}}""")
+            deleteOnExit()
+        }
+        val loaded = OnnxWordPieceTokenizer.loadVocab(arrayVocabFile)
+        loaded shouldNotBe null
+        loaded?.get("\u2581hi") shouldBe 2
+
+        val emptyVocabFile = java.io.File.createTempFile("empty_array", ".json").apply {
+            writeText("""{"model": {"vocab": []}}""")
+            deleteOnExit()
+        }
+        OnnxWordPieceTokenizer.loadVocab(emptyVocabFile) shouldBe null
+
+        OnnxWordPieceTokenizer.isSentencePiece(mapOf("[CLS]" to 0, "test" to 1)) shouldBe false
+        OnnxWordPieceTokenizer.isSentencePiece(mapOf("</s>" to 0, "test" to 1)) shouldBe true
+        OnnxWordPieceTokenizer.isSentencePiece(mapOf("\u2581test" to 0)) shouldBe true
+        OnnxWordPieceTokenizer.isSentencePiece(mapOf("test" to 0)) shouldBe false
+    }
+
+    test("OnnxInferenceEngine performs seq2seq autoregressive decoding with opus-mt model") {
+        val realModelDir = java.io.File("config/stellar_lang/models")
+        val enDecoder = java.io.File(realModelDir, "translation/en/decoder.onnx")
+        if (enDecoder.exists()) {
+            val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")!!
+            config.onnxModelDir.setValue(realModelDir.absolutePath, false)
+            OnnxInferenceEngine.resetSessions()
+
+            OnnxInferenceEngine.isTranslationModelGenerative("en") shouldBe true
+            val translated = OnnxInferenceEngine.translate("Ta mère est pas prête", null, "en")
+            translated shouldBe "Your mother's not ready"
+
+            // Second call exercises decoder session caching hit
+            val cachedTrans = OnnxInferenceEngine.translate("Ta mère est pas prête", null, "en")
+            cachedTrans shouldBe "Your mother's not ready"
+
+            OnnxInferenceEngine.resetSessions()
+        }
+    }
+
+    test("OnnxInferenceEngine handles corrupt decoder model and empty inputs") {
+        OnnxInferenceEngine.detectLanguage("") shouldBe null
+        OnnxInferenceEngine.detectLanguage("   ") shouldBe null
+        OnnxInferenceEngine.translate("", null, "en") shouldBe null
+        OnnxInferenceEngine.translate("   ", null, "en") shouldBe null
+
+        val tempDir = java.io.File("build/test_corrupt_dec_${System.nanoTime()}")
+        val transDir = java.io.File(tempDir, "translation/corrupt").apply { mkdirs() }
+        java.io.File("src/test/resources/test_models/detection/model.onnx").copyTo(java.io.File(transDir, "model.onnx"))
+
+        val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")!!
+        config.onnxModelDir.setValue(tempDir.path, false)
+        OnnxInferenceEngine.resetSessions()
+
+        // Should return false because decoder does not exist and encoder output is not INT64
+        OnnxInferenceEngine.isTranslationModelGenerative("corrupt") shouldBe false
+
+        // Now write corrupt decoder.onnx to test getOrCreateDecoderSession failure handling
+        java.io.File(transDir, "decoder.onnx").writeText("corrupt onnx content")
+        OnnxInferenceEngine.translate("Hello world", null, "corrupt") shouldBe null
+
+        tempDir.deleteRecursively()
+        OnnxInferenceEngine.resetSessions()
     }
 })

@@ -25,6 +25,7 @@ import java.util.regex.Pattern
 object ChatTranslationManager {
     const val COMMAND_PREFIX: String = "/stellar_lang_chat_toggle"
     private const val MIN_TRANSLATABLE_LENGTH = 2
+    private const val TOGGLE_HOVER_TEXT = "Click to toggle original/translated text"
     private val idGenerator = AtomicLong(1000L)
     private val trackedMessages = ConcurrentHashMap<Long, TrackedChatMessage>()
 
@@ -152,6 +153,7 @@ object ChatTranslationManager {
         return resolveAndTranslate(component, payload, TranslationService.getTargetLanguage())
     }
 
+    @Suppress("ReturnCount")
     private fun resolveAndTranslate(
         component: Component,
         payload: ParsedChatPayload,
@@ -183,13 +185,21 @@ object ChatTranslationManager {
 
         if (cached == null) {
             triggerBackgroundChatTranslation(tracked, payload.messageText)
+            val translating = createTranslatingComponent(id, payload.messageText, payload.prefixComponent)
+            tracked.translatedComponent = translating
+            return translating
         }
 
         return component
     }
 
-    private fun triggerBackgroundChatTranslation(tracked: TrackedChatMessage, messageText: String) {
-        TranslationService.translateAsync(messageText) { result ->
+    @JvmOverloads
+    fun triggerBackgroundChatTranslation(
+        tracked: TrackedChatMessage,
+        messageText: String,
+        forceRetry: Boolean = false,
+    ) {
+        TranslationService.translateAsync(messageText, forceRetry = forceRetry) { result ->
             if (result != null && !result.isSameLanguage) {
                 val translated = createTranslatedComponent(tracked.id, result, tracked.prefixComponent)
                 tracked.translatedComponent = translated
@@ -203,7 +213,8 @@ object ChatTranslationManager {
     }
 
     private fun shouldSkipMessage(text: String): Boolean {
-        return text.length < MIN_TRANSLATABLE_LENGTH || text.startsWith("/") || text.startsWith("[T]")
+        val isBadgePrefix = text.startsWith("[T]") || text.startsWith("[...]")
+        return text.length < MIN_TRANSLATABLE_LENGTH || text.startsWith("/") || isBadgePrefix
     }
 
     fun createTranslatedComponent(
@@ -218,12 +229,11 @@ object ChatTranslationManager {
                     HoverEvent.ShowText(
                         Component.literal(
                             "Translated: [${result.detectedLanguage} -> ${result.targetLanguage}]\n" +
-                                "Original: ${result.originalText}\n" +
-                                "Click to toggle original/translated text",
+                                "Original: ${result.originalText}\n$TOGGLE_HOVER_TEXT",
                         ),
                     ),
                 )
-                .withClickEvent(ClickEvent.RunCommand("$COMMAND_PREFIX $id"))
+                .withClickEvent(ClickEvent.RunCommand(buildToggleCommand(id)))
         }
 
         val root = Component.empty().append(badge)
@@ -247,12 +257,11 @@ object ChatTranslationManager {
                     HoverEvent.ShowText(
                         Component.literal(
                             "Translation failed\n" +
-                                "Original: $originalText\n" +
-                                "Click to toggle original/translated text",
+                                "Original: $originalText\n$TOGGLE_HOVER_TEXT",
                         ),
                     ),
                 )
-                .withClickEvent(ClickEvent.RunCommand("$COMMAND_PREFIX $id"))
+                .withClickEvent(ClickEvent.RunCommand(buildToggleCommand(id)))
         }
 
         val root = Component.empty().append(badge)
@@ -262,6 +271,34 @@ object ChatTranslationManager {
         root.append(Component.literal(originalText))
         return root
     }
+
+    fun createTranslatingComponent(
+        id: Long,
+        originalText: String,
+        prefixComponent: Component? = null,
+    ): MutableComponent {
+        val badge = Component.literal("[...] ").withStyle { style ->
+            style.withColor(ChatFormatting.GRAY)
+                .withHoverEvent(
+                    HoverEvent.ShowText(
+                        Component.literal(
+                            "Translating...\n" +
+                                "Original: $originalText\n$TOGGLE_HOVER_TEXT",
+                        ),
+                    ),
+                )
+                .withClickEvent(ClickEvent.RunCommand(buildToggleCommand(id)))
+        }
+
+        val root = Component.empty().append(badge)
+        if (prefixComponent != null) {
+            root.append(prefixComponent)
+        }
+        root.append(Component.literal(originalText))
+        return root
+    }
+
+    private fun buildToggleCommand(id: Long): String = "$COMMAND_PREFIX $id"
 
     private fun scheduleChatRefresh(tracked: TrackedChatMessage) {
         val customScheduler = refreshScheduler
@@ -354,12 +391,23 @@ object ChatTranslationManager {
         updateChatDisplayWithAccessor(accessor, tracked)
     }
 
+    @Suppress("ReturnCount")
     fun handleCommandClick(command: String): Boolean {
         if (!command.startsWith(COMMAND_PREFIX)) return false
 
         val idStr = command.removePrefix(COMMAND_PREFIX).trim()
         val id = idStr.toLongOrNull() ?: return false
         val tracked = trackedMessages[id] ?: return false
+
+        val targetLang = TranslationService.getTargetLanguage()
+        if (TranslationService.isFailed(tracked.messageText, targetLang)) {
+            tracked.isShowingOriginal = false
+            val translatingComp = createTranslatingComponent(id, tracked.messageText, tracked.prefixComponent)
+            tracked.translatedComponent = translatingComp
+            updateChatDisplay(tracked)
+            triggerBackgroundChatTranslation(tracked, tracked.messageText, forceRetry = true)
+            return true
+        }
 
         tracked.isShowingOriginal = !tracked.isShowingOriginal
         updateChatDisplay(tracked)

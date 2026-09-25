@@ -128,7 +128,7 @@ class ChatTranslationManagerSpec : FunSpec({
 
         val orig = Component.literal("Wie geht es dir?")
         val returned = ChatTranslationManager.processIncomingMessage(orig)
-        returned shouldBe orig
+        returned.string shouldBe "[...] Wie geht es dir?"
 
         // Test background translation callback execution with seeded cache for translateAsync
         val tracked = ChatTranslationManager.TrackedChatMessage(88L, orig, "Wie geht es dir?")
@@ -508,7 +508,7 @@ class ChatTranslationManagerSpec : FunSpec({
 
         val input = Component.literal("Bonjour les amis")
         val resultComp = ChatTranslationManager.processIncomingMessage(input)
-        resultComp shouldBe input
+        resultComp.string shouldBe "[...] Bonjour les amis"
 
         var attempts = 0
         while (attempts++ < 30 && refreshedTracked?.translatedComponent == null) {
@@ -593,5 +593,36 @@ class ChatTranslationManagerSpec : FunSpec({
         accessorCalled shouldBe true
         ChatTranslationManager.minecraftExecutor = null
         ChatTranslationManager.chatAccessorProvider = null
+    }
+
+    test("handleCommandClick on failed message triggers retry and shows translating badge") {
+        var refreshed = false
+        ChatTranslationManager.refreshScheduler = { refreshed = true }
+
+        val targetLang = TranslationService.getTargetLanguage()
+        val text = "Echec a retester"
+        val key = TranslationService.cacheKey(text, targetLang)
+        com.stellar.lang.service.TranslationCache.markFailed(key)
+
+        val orig = Component.literal(text)
+        val tracked = ChatTranslationManager.TrackedChatMessage(
+            id = 55_555L,
+            originalComponent = orig,
+            plainText = text,
+            messageText = text,
+        )
+        tracked.translatedComponent = ChatTranslationManager.createFailedComponent(55_555L, text)
+
+        val mapField = ChatTranslationManager::class.java.getDeclaredField("trackedMessages")
+        mapField.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val map = mapField.get(ChatTranslationManager) as
+            java.util.concurrent.ConcurrentHashMap<Long, ChatTranslationManager.TrackedChatMessage>
+        map[55_555L] = tracked
+
+        ChatTranslationManager.handleCommandClick("/stellar_lang_chat_toggle 55555") shouldBe true
+        tracked.translatedComponent!!.string shouldBe "[...] $text"
+        tracked.translatedComponent!!.siblings.first().style.color shouldBe
+            TextColor.fromLegacyFormat(ChatFormatting.GRAY)
     }
 })

@@ -28,8 +28,19 @@ class TranslationBadgeHelperSpec : FunSpec({
         defaultFailedBadge.string shouldBe "[T] "
     }
 
+    test("createTranslatingBadge creates gray badge") {
+        val badge = TranslationBadgeHelper.createTranslatingBadge(trailingSpace = true)
+        badge.string shouldBe "[...] "
+        badge.style.color shouldBe TextColor.fromLegacyFormat(ChatFormatting.GRAY)
+
+        val noSpace = TranslationBadgeHelper.createTranslatingBadge(trailingSpace = false)
+        noSpace.string shouldBe "[...]"
+        noSpace.style.color shouldBe TextColor.fromLegacyFormat(ChatFormatting.GRAY)
+    }
+
     test("constant indicator colors match formatting colors") {
         TranslationBadgeHelper.INDICATOR_COLOR shouldBe 0x55FFFF
         TranslationBadgeHelper.INDICATOR_FAILED_COLOR shouldBe 0xFF5555
+        TranslationBadgeHelper.INDICATOR_TRANSLATING_COLOR shouldBe 0xAAAAAA
     }
 })

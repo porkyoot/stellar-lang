@@ -350,4 +350,177 @@ class TranslationRetrySpec : FunSpec({
         expired shouldBe null
         EntityTranslationManager.failedEntities.contains(textKey) shouldBe false
     }
+
+    test("SignTranslationManager isTranslating and translateSignText forceRetry work") {
+        val signText = SignText().setMessage(0, Component.literal("Panneau traduit"))
+        val targetLang = TranslationService.getTargetLanguage()
+        val key = TranslationCache.cacheKey("Panneau traduit", targetLang)
+
+        SignTranslationManager.isTranslating(signText) shouldBe false
+        SignTranslationManager.isTranslating(SignText()) shouldBe false
+
+        TranslationCache.queueInFlight(key) {}
+        SignTranslationManager.isTranslating(signText) shouldBe true
+        TranslationService.isInFlight("Panneau traduit") shouldBe true
+
+        TranslationCache.completeInFlight(key, null)
+        SignTranslationManager.isTranslating(signText) shouldBe false
+
+        // Test translateSignText with forceRetry = true
+        SignTranslationManager.translateSignText(signText, forceRetry = true)
+        TranslationCache.completeInFlight(key, null)
+    }
+
+    test("TranslationBadgeHelper and ChatTranslationManager default arguments") {
+        val badge = com.stellar.lang.badge.TranslationBadgeHelper.createTranslatingBadge()
+        badge.string shouldBe "[...] "
+
+        val chatComp = ChatTranslationManager.createTranslatingComponent(123L, "Default chat")
+        chatComp.string shouldBe "[...] Default chat"
+
+        val prefixedComp = ChatTranslationManager.createTranslatingComponent(
+            124L,
+            "Prefixed chat",
+            Component.literal("[PREFIX] "),
+        )
+        prefixedComp.string shouldBe "[...] [PREFIX] Prefixed chat"
+    }
+
+    test("Item, entity, and sign translation managers throttle retries within cooldown") {
+        val targetLang = TranslationService.getTargetLanguage()
+
+        val itemText = "Epee cooldown"
+        val itemKey = "$targetLang::${itemText.hashCode()}"
+        val itemComp = Component.literal(itemText)
+        val resolveItemMethod = ItemTranslationManager::class.java.getDeclaredMethod(
+            "resolveItemTranslation",
+            String::class.java,
+            String::class.java,
+            String::class.java,
+            Component::class.java,
+        ).apply { isAccessible = true }
+
+        ItemTranslationManager.failedItems.add(itemKey)
+        val inFlightItem = resolveItemMethod.invoke(
+            ItemTranslationManager,
+            itemText,
+            targetLang,
+            itemKey,
+            itemComp,
+        ) as Component
+        inFlightItem.string shouldBe "[...] $itemText"
+
+        TranslationCache.completeInFlight(TranslationCache.cacheKey(itemText, targetLang), null)
+        ItemTranslationManager.failedItems.add(itemKey)
+        val throttledItem = resolveItemMethod.invoke(
+            ItemTranslationManager,
+            itemText,
+            targetLang,
+            itemKey,
+            itemComp,
+        ) as Component
+        throttledItem.string shouldBe "[T] $itemText"
+
+        val entityText = "Zombie cooldown"
+        val entityKey = "$targetLang::$entityText"
+        val entityComp = Component.literal(entityText)
+        val resolveEntityMethod = EntityTranslationManager::class.java.getDeclaredMethod(
+            "resolveEntityTranslation",
+            String::class.java,
+            String::class.java,
+            String::class.java,
+            Component::class.java,
+        ).apply { isAccessible = true }
+
+        EntityTranslationManager.failedEntities.add(entityKey)
+        val inFlightEntity = resolveEntityMethod.invoke(
+            EntityTranslationManager,
+            entityText,
+            targetLang,
+            entityKey,
+            entityComp,
+        ) as Component
+        inFlightEntity.string shouldBe "[...] $entityText"
+
+        TranslationCache.completeInFlight(entityKey, null)
+        EntityTranslationManager.failedEntities.add(entityKey)
+        val throttledEntity = resolveEntityMethod.invoke(
+            EntityTranslationManager,
+            entityText,
+            targetLang,
+            entityKey,
+            entityComp,
+        ) as Component
+        throttledEntity.string shouldBe "[T] $entityText"
+
+        val signText = SignText().setMessage(0, Component.literal("Panneau cooldown"))
+        val signSentence = "Panneau cooldown"
+        val signKey = "$targetLang::$signSentence"
+        TranslationCache.markFailed(signKey)
+        SignTranslationManager.failedSignKeys.add(signKey)
+
+        SignTranslationManager.translateSignText(signText, forceRetry = false)
+        SignTranslationManager.translateSignText(signText, forceRetry = true)
+        SignTranslationManager.translateSignText(signText, forceRetry = true)
+        TranslationCache.completeInFlight(signKey, null)
+    }
+
+    test("ItemTranslationManager and EntityTranslationManager retry callbacks handle success and failure") {
+        val targetLang = TranslationService.getTargetLanguage()
+        val itemText = "Epee magique retry"
+        val itemKey = "$targetLang::${itemText.hashCode()}"
+        val itemComp = Component.literal(itemText)
+        val resolveItemMethod = ItemTranslationManager::class.java.getDeclaredMethod(
+            "resolveItemTranslation",
+            String::class.java,
+            String::class.java,
+            String::class.java,
+            Component::class.java,
+        ).apply { isAccessible = true }
+
+        // 1. Success on retry with callback completion
+        ItemTranslationManager.failedItems.add(itemKey)
+        val res = resolveItemMethod.invoke(ItemTranslationManager, itemText, targetLang, itemKey, itemComp)
+            as Component
+        res.string shouldBe "[...] $itemText"
+        val retryResult = TranslationResult(itemText, "Magic sword retry", "fr", targetLang, false)
+        TranslationCache.completeInFlight(TranslationCache.cacheKey(itemText, targetLang), retryResult)
+
+        // 2. Failure on retry with callback completion
+        TranslationCache.clear()
+        TranslationCache.markFailed(TranslationCache.cacheKey(itemText, targetLang))
+        ItemTranslationManager.failedItems.add(itemKey)
+        resolveItemMethod.invoke(ItemTranslationManager, itemText, targetLang, itemKey, itemComp)
+        TranslationCache.completeInFlight(TranslationCache.cacheKey(itemText, targetLang), null)
+
+        // 3. Entity retry success and failure
+        val entityText = "Monstre mystique retry"
+        val entityKey = "$targetLang::$entityText"
+        val entityComp = Component.literal(entityText)
+        val resolveEntityMethod = EntityTranslationManager::class.java.getDeclaredMethod(
+            "resolveEntityTranslation",
+            String::class.java,
+            String::class.java,
+            String::class.java,
+            Component::class.java,
+        ).apply { isAccessible = true }
+
+        EntityTranslationManager.failedEntities.add(entityKey)
+        val entRes = resolveEntityMethod.invoke(
+            EntityTranslationManager,
+            entityText,
+            targetLang,
+            entityKey,
+            entityComp,
+        ) as Component
+        entRes.string shouldBe "[...] $entityText"
+        val entityResult = TranslationResult(entityText, "Mystic monster retry", "fr", targetLang, false)
+        TranslationCache.completeInFlight(entityKey, entityResult)
+
+        TranslationCache.clear()
+        TranslationCache.markFailed(entityKey)
+        EntityTranslationManager.failedEntities.add(entityKey)
+        resolveEntityMethod.invoke(EntityTranslationManager, entityText, targetLang, entityKey, entityComp)
+        TranslationCache.completeInFlight(entityKey, null)
+    }
 })

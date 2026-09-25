@@ -122,9 +122,26 @@ object OnnxModelManager {
         return File(dir, "model.onnx")
     }
 
+    fun getTranslationDecoderFile(targetLang: String): File {
+        val dir = File(getModelsDir(), "translation/$targetLang")
+        if (!dir.exists()) dir.mkdirs()
+        return File(dir, "decoder.onnx")
+    }
+
+    fun getTranslationVocabFile(targetLang: String): File {
+        val dir = File(getModelsDir(), "translation/$targetLang")
+        if (!dir.exists()) dir.mkdirs()
+        return File(dir, "tokenizer.json")
+    }
+
     fun isDetectionModelReady(): Boolean {
         val model = getDetectionModelFile()
         return model.exists() && model.length() >= MIN_MODEL_SIZE_BYTES
+    }
+
+    fun isDecoderReady(targetLang: String): Boolean {
+        val decoder = getTranslationDecoderFile(targetLang)
+        return decoder.exists() && decoder.length() >= MIN_MODEL_SIZE_BYTES
     }
 
     fun isTranslationModelReady(targetLang: String): Boolean {
@@ -171,10 +188,22 @@ object OnnxModelManager {
             return PluginStatus.Error(state.errorMessage ?: "Download failed")
         }
         return if (isTranslationModelReady(targetLang)) {
-            PluginStatus.Ready("Model for '$targetLang' ready")
+            if (isEncoderOnlyModel(targetLang)) {
+                PluginStatus.NotConfigured("Translation model for '$targetLang' is encoder-only (decoder required)")
+            } else {
+                PluginStatus.Ready("Model for '$targetLang' ready")
+            }
         } else {
             PluginStatus.NotConfigured("Translation model for '$targetLang' not downloaded")
         }
+    }
+
+    fun isEncoderOnlyModel(targetLang: String): Boolean {
+        val modelFile = getTranslationModelFile(targetLang)
+        return OnnxInferenceEngine.isEnvironmentAvailable() &&
+            OnnxInferenceEngine.validateModel(modelFile) &&
+            !OnnxInferenceEngine.isTranslationModelGenerative(targetLang) &&
+            !isDecoderReady(targetLang)
     }
 
     fun downloadDetectionModelAsync(
@@ -232,9 +261,23 @@ object OnnxModelManager {
         return "https://huggingface.co/onnx-community/$repo/resolve/main/onnx/encoder_model_quantized.onnx"
     }
 
+    fun getTranslationDecoderUrl(targetLang: String): String {
+        val lang = targetLang.lowercase().trim()
+        val repo = if (lang == "en") "opus-mt-mul-en" else "opus-mt-en-$lang"
+        return "https://huggingface.co/onnx-community/$repo/resolve/main/onnx/decoder_model_quantized.onnx"
+    }
+
+    fun getTranslationVocabUrl(targetLang: String): String {
+        val lang = targetLang.lowercase().trim()
+        val repo = if (lang == "en") "opus-mt-mul-en" else "opus-mt-en-$lang"
+        return "https://huggingface.co/onnx-community/$repo/resolve/main/tokenizer.json"
+    }
+
     fun downloadTranslationModelAsync(
         targetLang: String,
         modelUrl: String? = null,
+        decoderUrl: String? = null,
+        vocabUrl: String? = null,
         forceRetry: Boolean = false,
         onProgress: ((Int) -> Unit)? = null,
         onComplete: ((Result<File>) -> Unit)? = null,
@@ -259,6 +302,20 @@ object OnnxModelManager {
                     downloadFileWithProgress(url, destination) { progress ->
                         state.progressPercent = progress
                         onProgress?.invoke(progress)
+                    }
+                    val dUrl = decoderUrl ?: if (modelUrl == null) getTranslationDecoderUrl(targetLang) else null
+                    if (dUrl != null) {
+                        val decoderDest = getTranslationDecoderFile(targetLang)
+                        if (!decoderDest.exists()) {
+                            runCatching { downloadFileWithProgress(dUrl, decoderDest) {} }
+                        }
+                    }
+                    val vUrl = vocabUrl ?: if (modelUrl == null) getTranslationVocabUrl(targetLang) else null
+                    if (vUrl != null) {
+                        val vocabDest = getTranslationVocabFile(targetLang)
+                        if (!vocabDest.exists()) {
+                            runCatching { downloadFileWithProgress(vUrl, vocabDest) {} }
+                        }
                     }
                     state.isDownloading = false
                     state.progressPercent = 100

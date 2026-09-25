@@ -40,6 +40,7 @@ object SignTooltipRenderer {
     private const val INDICATOR_HANGING_Y = -26f
     private const val INDICATOR_COLOR = 0xFF55FFFF.toInt()
     private const val INDICATOR_FAILED_COLOR = 0xFFFF5555.toInt()
+    private const val INDICATOR_TRANSLATING_COLOR = 0xFFAAAAAA.toInt()
 
     data class SignRenderOutcomeData(
         val frontOutcome: SignFormatHelper.SignTranslationOutcome?,
@@ -48,6 +49,8 @@ object SignTooltipRenderer {
         val isHanging: Boolean = false,
         val isFrontFailed: Boolean = false,
         val isBackFailed: Boolean = false,
+        val isFrontTranslating: Boolean = false,
+        val isBackTranslating: Boolean = false,
     )
 
     private val renderStateData = Collections.synchronizedMap(
@@ -118,10 +121,11 @@ object SignTooltipRenderer {
         val facingFront = isFacingFront(state, data, mc)
         val activeOutcome = if (facingFront) data.frontOutcome else data.backOutcome
         val isFailed = if (facingFront) data.isFrontFailed else data.isBackFailed
-        if (activeOutcome == null && !isFailed) return
+        val isTranslating = if (facingFront) data.isFrontTranslating else data.isBackTranslating
+        if (shouldSkipRendering(activeOutcome, isFailed, isTranslating)) return
 
         // 1. Display [T] on the visible face using the same system as sign text
-        renderSignIndicator(state, data, facingFront, poseStack, submitNodeCollector, mc, isFailed)
+        renderSignIndicator(state, data, facingFront, poseStack, submitNodeCollector, mc, isFailed, isTranslating)
 
         // 2. Display nametag over the sign strictly on the visible face if text has overflow
         if (activeOutcome != null && activeOutcome.hasOverflow) {
@@ -147,6 +151,7 @@ object SignTooltipRenderer {
         submitNodeCollector: SubmitNodeCollector,
         mc: Minecraft,
         isFailed: Boolean = false,
+        isTranslating: Boolean = false,
     ) {
         val transformations = state.transformations
         val transformation = if (facingFront) transformations.frontText() else transformations.backText()
@@ -154,12 +159,20 @@ object SignTooltipRenderer {
         val isHanging = data.isHanging || state is HangingSignRenderState
         val textY = if (isHanging) INDICATOR_HANGING_Y else INDICATOR_STANDING_Y
 
-        val indicator = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(isFailed, trailingSpace = false)
+        val indicator = if (isTranslating) {
+            com.stellar.lang.badge.TranslationBadgeHelper.createTranslatingBadge(trailingSpace = false)
+        } else {
+            com.stellar.lang.badge.TranslationBadgeHelper.createBadge(isFailed, trailingSpace = false)
+        }
         val font = mc.font
         val formattedCharSeq = indicator.visualOrderText
         val textWidth = font.width(formattedCharSeq)
         val textX = -textWidth / 2f
-        val color = if (isFailed) INDICATOR_FAILED_COLOR else INDICATOR_COLOR
+        val color = when {
+            isTranslating -> INDICATOR_TRANSLATING_COLOR
+            isFailed -> INDICATOR_FAILED_COLOR
+            else -> INDICATOR_COLOR
+        }
 
         poseStack.pushPose()
         poseStack.mulPose(transformation)
@@ -235,6 +248,7 @@ object SignTooltipRenderer {
         poseStack.popPose()
     }
 
+    @Suppress("CyclomaticComplexMethod")
     private fun resolveDataFromLevel(
         mc: Minecraft,
         state: SignRenderState,
@@ -245,6 +259,8 @@ object SignTooltipRenderer {
         val backOutcome = SignTranslationManager.getOutcome(sign, false)
         val isFrontFailed = frontOutcome == null && SignTranslationManager.isFailed(sign, true)
         val isBackFailed = backOutcome == null && SignTranslationManager.isFailed(sign, false)
+        val isFrontTranslating = frontOutcome == null && SignTranslationManager.isTranslating(sign, true)
+        val isBackTranslating = backOutcome == null && SignTranslationManager.isTranslating(sign, false)
         val isFront = mc.player?.let { sign.isFacingFrontText(it) } ?: true
         val isHanging = sign is HangingSignBlockEntity || state is HangingSignRenderState
         return SignRenderOutcomeData(
@@ -254,6 +270,8 @@ object SignTooltipRenderer {
             isHanging = isHanging,
             isFrontFailed = isFrontFailed,
             isBackFailed = isBackFailed,
+            isFrontTranslating = isFrontTranslating,
+            isBackTranslating = isBackTranslating,
         )
     }
 
@@ -320,6 +338,12 @@ object SignTooltipRenderer {
 
     private fun isDirectHit(hit: BlockHitResult, state: SignRenderState): Boolean =
         hit.type == HitResult.Type.BLOCK && hit.blockPos == state.blockPos
+
+    private fun shouldSkipRendering(
+        outcome: SignFormatHelper.SignTranslationOutcome?,
+        failed: Boolean,
+        translating: Boolean,
+    ): Boolean = outcome == null && !failed && !translating
 
     @Suppress("UnusedParameter")
     fun renderSignTooltipIfLooking(extractor: GuiGraphicsExtractor) {

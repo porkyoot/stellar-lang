@@ -209,4 +209,44 @@ class SignTranslationManagerSpec : FunSpec({
         SignTranslationManager.isFailed(sign, isFront = true) shouldBe true
         SignTranslationManager.isFailed(sign, isFront = false) shouldBe false
     }
+
+    test("isTranslating, getExcessText and getFullTranslation handle in-flight and empty signs") {
+        val unsafeField = sun.misc.Unsafe::class.java.getDeclaredField("theUnsafe")
+        unsafeField.isAccessible = true
+        val unsafe = unsafeField.get(null) as sun.misc.Unsafe
+        val sign = unsafe.allocateInstance(net.minecraft.world.level.block.entity.SignBlockEntity::class.java)
+            as net.minecraft.world.level.block.entity.SignBlockEntity
+
+        val frontTextField = net.minecraft.world.level.block.entity.SignBlockEntity::class.java
+            .getDeclaredField("frontText")
+        frontTextField.isAccessible = true
+        var frontSignText = SignText()
+        frontSignText = frontSignText.setMessage(0, Component.literal("En route"))
+        frontTextField.set(sign, frontSignText)
+
+        val backTextField = net.minecraft.world.level.block.entity.SignBlockEntity::class.java
+            .getDeclaredField("backText")
+        backTextField.isAccessible = true
+        backTextField.set(sign, SignText())
+
+        val targetLang = TranslationService.getTargetLanguage()
+        val key = com.stellar.lang.service.TranslationCache.cacheKey("En route", targetLang)
+
+        SignTranslationManager.isTranslating(sign, isFront = true) shouldBe false
+        SignTranslationManager.isTranslating(sign, isFront = false) shouldBe false
+        SignTranslationManager.isTranslating(SignText()) shouldBe false
+
+        com.stellar.lang.service.TranslationCache.queueInFlight(key) {}
+        SignTranslationManager.isTranslating(sign, isFront = true) shouldBe true
+        SignTranslationManager.isTranslating(sign, isFront = false) shouldBe false
+        SignTranslationManager.isTranslating(frontSignText) shouldBe true
+
+        com.stellar.lang.service.TranslationCache.completeInFlight(key, null)
+        SignTranslationManager.isTranslating(sign, isFront = true) shouldBe false
+
+        SignTranslationManager.getExcessText(sign, isFront = true) shouldBe null
+        SignTranslationManager.getExcessText(sign, isFront = false) shouldBe null
+        SignTranslationManager.getFullTranslation(sign, isFront = true) shouldBe null
+        SignTranslationManager.getFullTranslation(sign, isFront = false) shouldBe null
+    }
 })

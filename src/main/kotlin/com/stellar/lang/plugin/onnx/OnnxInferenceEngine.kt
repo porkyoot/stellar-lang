@@ -7,7 +7,9 @@
     "UnderscoresInNumericLiterals",
     "LongMethod",
     "CognitiveComplexMethod",
+    "CyclomaticComplexMethod",
     "StringLiteralDuplication",
+    "TooManyFunctions",
 )
 
 package com.stellar.lang.plugin.onnx
@@ -28,6 +30,7 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object OnnxInferenceEngine : AutoCloseable {
     private val logger: Logger = LoggerFactory.getLogger("StellarLang-OnnxInference")
+    private val inferenceLock = Any()
 
     @Volatile
     private var env: OrtEnvironment? = null
@@ -54,6 +57,10 @@ object OnnxInferenceEngine : AutoCloseable {
     private val translationSessions = ConcurrentHashMap<String, OrtSession>()
 
     private val loadedTranslationModelPaths = ConcurrentHashMap<String, String>()
+
+    private val decoderSessions = ConcurrentHashMap<String, OrtSession>()
+
+    private val loadedDecoderModelPaths = ConcurrentHashMap<String, String>()
 
     // Mapping of FLORES-200 class indices to standard 2-letter ISO language codes
     private val idToLanguage = arrayOf(
@@ -182,6 +189,37 @@ object OnnxInferenceEngine : AutoCloseable {
         }.getOrNull()
     }
 
+    @Synchronized
+    private fun getOrCreateDecoderSession(targetLang: String): OrtSession? {
+        val environment = getOrInitEnv() ?: return null
+        val modelFile = OnnxModelManager.getTranslationDecoderFile(targetLang)
+        if (!modelFile.exists() || modelFile.length() == 0L) {
+            decoderSessions.remove(targetLang)?.close()
+            loadedDecoderModelPaths.remove(targetLang)
+            return null
+        }
+        val existing = decoderSessions[targetLang]
+        if (existing != null && loadedDecoderModelPaths[targetLang] == modelFile.absolutePath) {
+            return existing
+        }
+        existing?.close()
+        decoderSessions.remove(targetLang)
+        loadedDecoderModelPaths.remove(targetLang)
+
+        return runCatching {
+            val opts = OrtSession.SessionOptions().apply {
+                setIntraOpNumThreads(getExecutionThreads())
+            }
+            environment.createSession(modelFile.absolutePath, opts).also {
+                decoderSessions[targetLang] = it
+                loadedDecoderModelPaths[targetLang] = modelFile.absolutePath
+                logger.info("Initialized ONNX decoder session for '{}'", targetLang)
+            }
+        }.onFailure { ex ->
+            logger.error("Failed to load ONNX decoder model for '{}': {}", targetLang, ex.message)
+        }.getOrNull()
+    }
+
     fun detectLanguage(text: String): String? {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return null
@@ -189,52 +227,63 @@ object OnnxInferenceEngine : AutoCloseable {
         val environment = getOrInitEnv() ?: return null
         val session = getOrCreateDetectionSession() ?: return null
 
-        return runCatching {
-            val tokens = simpleTokenize(trimmed, maxLen = 64)
-            val seqLen = tokens.size.toLong()
+        return synchronized(inferenceLock) {
+            runCatching {
+                val tokens = simpleTokenize(trimmed, maxLen = 64)
+                val seqLen = tokens.size.toLong()
 
-            val tokenBuffer = LongBuffer.wrap(tokens)
-            val maskBuffer = LongBuffer.wrap(LongArray(tokens.size) { 1L })
-            val typeBuffer = LongBuffer.wrap(LongArray(tokens.size) { 0L })
+                val tokenBuffer = LongBuffer.wrap(tokens)
+                val maskBuffer = LongBuffer.wrap(LongArray(tokens.size) { 1L })
+                val typeBuffer = LongBuffer.wrap(LongArray(tokens.size) { 0L })
 
-            val inputTensor = OnnxTensor.createTensor(environment, tokenBuffer, longArrayOf(1, seqLen))
-            val maskTensor = OnnxTensor.createTensor(environment, maskBuffer, longArrayOf(1, seqLen))
-            val typeTensor = OnnxTensor.createTensor(environment, typeBuffer, longArrayOf(1, seqLen))
+                val inputTensor = OnnxTensor.createTensor(environment, tokenBuffer, longArrayOf(1, seqLen))
+                var maskTensor: OnnxTensor? = null
+                var typeTensor: OnnxTensor? = null
+                var results: OrtSession.Result? = null
+                try {
+                    maskTensor = OnnxTensor.createTensor(environment, maskBuffer, longArrayOf(1, seqLen))
+                    typeTensor = OnnxTensor.createTensor(environment, typeBuffer, longArrayOf(1, seqLen))
 
-            val inputs = mutableMapOf<String, OnnxTensor>(
-                "input_ids" to inputTensor,
-                "attention_mask" to maskTensor,
-            )
-            if (session.inputNames.contains("token_type_ids")) {
-                inputs["token_type_ids"] = typeTensor
-            }
+                    val inputs = mutableMapOf<String, OnnxTensor>(
+                        "input_ids" to inputTensor,
+                        "attention_mask" to maskTensor,
+                    )
+                    if (session.inputNames.contains("token_type_ids")) {
+                        inputs["token_type_ids"] = typeTensor
+                    }
 
-            val results = session.run(inputs)
-            val outputTensor = results.get(0) as? OnnxTensor ?: return null
-            val logits = (outputTensor.value as Array<*>) [0] as FloatArray
+                    results = session.run(inputs)
+                    val outputTensor = results.get(0) as? OnnxTensor
+                    val logits = (outputTensor?.value as? Array<*>)?.get(0) as? FloatArray
 
-            var maxIdx = 0
-            var maxVal = Float.NEGATIVE_INFINITY
-            for (i in logits.indices) {
-                if (logits[i] > maxVal) {
-                    maxVal = logits[i]
-                    maxIdx = i
+                    if (logits != null) {
+                        var maxIdx = 0
+                        var maxVal = Float.NEGATIVE_INFINITY
+                        for (i in logits.indices) {
+                            if (logits[i] > maxVal) {
+                                maxVal = logits[i]
+                                maxIdx = i
+                            }
+                        }
+
+                        if (maxIdx in idToLanguage.indices) {
+                            idToLanguage[maxIdx]
+                        } else {
+                            null
+                        }
+                    } else {
+                        null
+                    }
+                } finally {
+                    results?.close()
+                    typeTensor?.close()
+                    maskTensor?.close()
+                    inputTensor.close()
                 }
-            }
-
-            inputTensor.close()
-            maskTensor.close()
-            typeTensor.close()
-            results.close()
-
-            if (maxIdx in idToLanguage.indices) {
-                idToLanguage[maxIdx]
-            } else {
-                null
-            }
-        }.onFailure { ex ->
-            logger.warn("ONNX language detection failed: {}", ex.message)
-        }.getOrNull()
+            }.onFailure { ex ->
+                logger.warn("ONNX language detection failed: {}", ex.message)
+            }.getOrNull()
+        }
     }
 
     fun translate(text: String, sourceLang: String?, targetLang: String): String? {
@@ -244,37 +293,158 @@ object OnnxInferenceEngine : AutoCloseable {
         val environment = getOrInitEnv() ?: return null
         val session = getOrCreateTranslationSession(targetLang) ?: return null
 
-        return runCatching {
-            // Encode input sequence
-            val tokens = simpleTokenize(trimmed, maxLen = 128)
-            val seqLen = tokens.size.toLong()
-            val tokenBuffer = LongBuffer.wrap(tokens)
-            val inputTensor = OnnxTensor.createTensor(environment, tokenBuffer, longArrayOf(1, seqLen))
-            val maskBuffer = LongBuffer.wrap(LongArray(tokens.size) { 1L })
-            val maskTensor = OnnxTensor.createTensor(environment, maskBuffer, longArrayOf(1, seqLen))
+        return synchronized(inferenceLock) {
+            runCatching {
+                val vocab = getOrLoadTranslationVocab(targetLang)
+                // Encode input sequence
+                val tokens = simpleTokenize(trimmed, maxLen = 128, vocab = vocab)
+                val seqLen = tokens.size.toLong()
+                val tokenBuffer = LongBuffer.wrap(tokens)
+                val inputTensor = OnnxTensor.createTensor(environment, tokenBuffer, longArrayOf(1, seqLen))
+                var maskTensor: OnnxTensor? = null
+                var results: OrtSession.Result? = null
+                try {
+                    val maskBuffer = LongBuffer.wrap(LongArray(tokens.size) { 1L })
+                    maskTensor = OnnxTensor.createTensor(environment, maskBuffer, longArrayOf(1, seqLen))
 
-            val inputs = mutableMapOf<String, OnnxTensor>("input_ids" to inputTensor)
-            if (session.inputNames.contains("attention_mask")) {
-                inputs["attention_mask"] = maskTensor
+                    val inputs = mutableMapOf<String, OnnxTensor>("input_ids" to inputTensor)
+                    if (session.inputNames.contains("attention_mask")) {
+                        inputs["attention_mask"] = maskTensor
+                    }
+                    results = session.run(inputs)
+                    val outputTensor = results.get(0) as? OnnxTensor
+                    val outputType = outputTensor?.info?.type
+
+                    if (outputType == ai.onnxruntime.OnnxJavaType.INT64) {
+                        val outTokens = when (val value = outputTensor.value) {
+                            is Array<*> -> value.firstOrNull() as? LongArray ?: LongArray(0)
+                            is LongArray -> value
+                            else -> LongArray(0)
+                        }
+                        if (vocab != null && outTokens.isNotEmpty()) {
+                            OnnxWordPieceTokenizer.detokenize(outTokens, vocab).ifBlank { null }
+                        } else {
+                            null
+                        }
+                    } else {
+                        val decoderSession = getOrCreateDecoderSession(targetLang)
+                        val canRunSeq2Seq = decoderSession != null && vocab != null
+                        val hasTensors = outputTensor != null && maskTensor != null
+                        if (canRunSeq2Seq && hasTensors) {
+                            val context = Seq2SeqContext(
+                                decoderSession = decoderSession,
+                                encoderHiddenStates = outputTensor,
+                                encoderAttentionMask = maskTensor,
+                                vocab = vocab,
+                            )
+                            runAutoregressiveDecoding(environment, context)
+                        } else {
+                            logger.debug(
+                                "ONNX translation model for '{}' is encoder-only (output: {}); " +
+                                    "decoder required for generation",
+                                targetLang,
+                                outputType,
+                            )
+                            null
+                        }
+                    }
+                } finally {
+                    results?.close()
+                    maskTensor?.close()
+                    inputTensor.close()
+                }
+            }.onFailure { ex ->
+                logger.warn("ONNX translation failed for target '{}': {}", targetLang, ex.message)
+            }.getOrNull()
+        }
+    }
+
+    private data class Seq2SeqContext(
+        val decoderSession: OrtSession,
+        val encoderHiddenStates: OnnxTensor,
+        val encoderAttentionMask: OnnxTensor,
+        val vocab: Map<String, Int>,
+    )
+
+    @Suppress("MagicNumber", "NestedBlockDepth", "ReturnCount")
+    private fun runAutoregressiveDecoding(
+        environment: OrtEnvironment,
+        ctx: Seq2SeqContext,
+    ): String? {
+        val startTokenId = (ctx.vocab["<pad>"] ?: 64171).toLong()
+        val eosTokenId = (ctx.vocab["</s>"] ?: 0).toLong()
+        val decTokens = mutableListOf<Long>(startTokenId)
+        val maxTokens = 64
+        var finished = false
+        var stepCount = 0
+
+        while (stepCount < maxTokens && !finished) {
+            stepCount++
+            val decSeqLen = decTokens.size.toLong()
+            val decBuffer = LongBuffer.wrap(decTokens.toLongArray())
+            val decInputTensor = OnnxTensor.createTensor(environment, decBuffer, longArrayOf(1, decSeqLen))
+            var decResults: OrtSession.Result? = null
+            try {
+                val decInputs = mapOf(
+                    "encoder_attention_mask" to ctx.encoderAttentionMask,
+                    "input_ids" to decInputTensor,
+                    "encoder_hidden_states" to ctx.encoderHiddenStates,
+                )
+                decResults = ctx.decoderSession.run(decInputs)
+                val logitsTensor = decResults.get(0) as? OnnxTensor
+                val stepLogits = when (val logitsVal = logitsTensor?.value) {
+                    is Array<*> -> {
+                        val batch0 = logitsVal.firstOrNull() as? Array<*>
+                        batch0?.getOrNull(decTokens.size - 1) as? FloatArray
+                    }
+                    else -> null
+                }
+                if (stepLogits == null) {
+                    finished = true
+                } else {
+                    if (startTokenId.toInt() in stepLogits.indices) {
+                        stepLogits[startTokenId.toInt()] = Float.NEGATIVE_INFINITY
+                    }
+
+                    var bestToken = 0
+                    var bestScore = Float.NEGATIVE_INFINITY
+                    for (i in stepLogits.indices) {
+                        if (stepLogits[i] > bestScore) {
+                            bestScore = stepLogits[i]
+                            bestToken = i
+                        }
+                    }
+
+                    if (bestToken.toLong() == eosTokenId) {
+                        finished = true
+                    } else {
+                        decTokens.add(bestToken.toLong())
+                    }
+                }
+            } finally {
+                decResults?.close()
+                decInputTensor.close()
             }
-            val results = session.run(inputs)
-            val outputTensor = results.get(0) as? OnnxTensor
-            val outputType = outputTensor?.info?.type
+        }
 
-            inputTensor.close()
-            maskTensor.close()
-            results.close()
+        val generated = decTokens.drop(1).toLongArray()
+        if (generated.isEmpty()) return null
+        return OnnxWordPieceTokenizer.detokenize(generated, ctx.vocab).ifBlank { null }
+    }
 
-            // If output is not token IDs (e.g. last_hidden_state float embeddings from encoder),
-            // it is only an encoder and cannot generate translated text without an autoregressive decoder.
-            if (outputType == ai.onnxruntime.OnnxJavaType.INT64) {
-                null
-            } else {
-                null
-            }
-        }.onFailure { ex ->
-            logger.warn("ONNX translation failed for target '{}': {}", targetLang, ex.message)
-        }.getOrNull()
+    fun isTranslationModelGenerative(targetLang: String): Boolean {
+        if (OnnxModelManager.isDecoderReady(targetLang)) return true
+        val session = getOrCreateTranslationSession(targetLang) ?: return false
+        val firstInfo = session.outputInfo.values.firstOrNull()?.info as? ai.onnxruntime.TensorInfo
+        return firstInfo?.type == ai.onnxruntime.OnnxJavaType.INT64
+    }
+
+    internal fun getOrLoadTranslationVocab(targetLang: String): Map<String, Int>? {
+        val vocabFile = OnnxModelManager.getTranslationVocabFile(targetLang)
+        if (vocabFile.exists() && vocabFile.length() > 0L) {
+            return OnnxWordPieceTokenizer.loadVocab(vocabFile)
+        }
+        return getOrLoadDetectionVocab()
     }
 
     internal fun getOrLoadDetectionVocab(): Map<String, Int>? {
@@ -297,10 +467,13 @@ object OnnxInferenceEngine : AutoCloseable {
     internal fun wordPieceTokenize(text: String, maxLen: Int, vocab: Map<String, Int>): LongArray =
         OnnxWordPieceTokenizer.tokenize(text, maxLen, vocab)
 
-    internal fun simpleTokenize(text: String, maxLen: Int): LongArray {
-        val vocab = getOrLoadDetectionVocab()
-        if (vocab != null) {
-            return wordPieceTokenize(text, maxLen, vocab)
+    internal fun simpleTokenize(text: String, maxLen: Int, vocab: Map<String, Int>? = null): LongArray {
+        val activeVocab = vocab ?: getOrLoadDetectionVocab()
+        if (activeVocab != null) {
+            if (OnnxWordPieceTokenizer.isSentencePiece(activeVocab)) {
+                return OnnxWordPieceTokenizer.tokenizeSentencePiece(text, maxLen, activeVocab)
+            }
+            return wordPieceTokenize(text, maxLen, activeVocab)
         }
         // Deterministic character/byte tokenization compatible with multilingual BERT input
         val tokens = mutableListOf<Long>()
@@ -321,6 +494,9 @@ object OnnxInferenceEngine : AutoCloseable {
         translationSessions.values.forEach { runCatching { it.close() } }
         translationSessions.clear()
         loadedTranslationModelPaths.clear()
+        decoderSessions.values.forEach { runCatching { it.close() } }
+        decoderSessions.clear()
+        loadedDecoderModelPaths.clear()
     }
 
     internal fun resetEnvironment() {

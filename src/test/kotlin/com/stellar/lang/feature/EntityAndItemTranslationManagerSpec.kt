@@ -459,15 +459,33 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
         )
         entityBadge.style.isStrikethrough shouldBe true
 
-        // Verify direct cache miss with TranslationService already in failed state
+        // Verify direct access when failed triggers retry with translating badge
         ItemTranslationManager.clearCache()
         val directFailedItem = ItemTranslationManager.translateItemName(itemStack, origItemComp)
-        directFailedItem.string shouldContain "[T] "
+        directFailedItem.string shouldContain "[...] "
         directFailedItem.string shouldContain "Épée Maudite"
 
         EntityTranslationManager.clearCache()
         val directFailedEntity = EntityTranslationManager.translateEntityName(null, entityComp)
-        directFailedEntity.string shouldContain "[T] "
+        directFailedEntity.string shouldContain "[...] "
         directFailedEntity.string shouldContain "Monstre Sombre"
+    }
+
+    test("ItemTranslationManager and EntityTranslationManager return translating name when in-flight") {
+        val text = "Objet En Vol"
+        val itemComp = Component.literal(text)
+        val stack = createMockStack(itemComp)
+        val targetLang = TranslationService.getTargetLanguage()
+        val key = com.stellar.lang.service.TranslationCache.cacheKey(text, targetLang)
+
+        com.stellar.lang.service.TranslationCache.queueInFlight(key) {}
+
+        val itemRes = ItemTranslationManager.translateItemName(stack, itemComp)
+        itemRes.string shouldBe "[...] $text"
+
+        val entityRes = EntityTranslationManager.translateEntityName(null, itemComp)
+        entityRes.string shouldBe "[...] $text"
+
+        com.stellar.lang.service.TranslationCache.completeInFlight(key, null)
     }
 })

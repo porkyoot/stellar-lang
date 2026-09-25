@@ -28,11 +28,14 @@ import com.stellar.lang.service.TranslationService
 import net.minecraft.ChatFormatting
 import net.minecraft.client.gui.GuiGraphicsExtractor
 import net.minecraft.client.gui.components.Button
+import net.minecraft.client.gui.components.MultiLineEditBox
 import net.minecraft.client.gui.screens.Screen
+import net.minecraft.client.gui.screens.inventory.BookEditScreen
 import net.minecraft.client.gui.screens.inventory.BookViewScreen
 import net.minecraft.client.gui.screens.inventory.PageButton
 import net.minecraft.network.chat.CommonComponents
 import net.minecraft.network.chat.Component
+import org.spongepowered.asm.mixin.Final
 import org.spongepowered.asm.mixin.Mixin
 import org.spongepowered.asm.mixin.Shadow
 import org.spongepowered.asm.mixin.Unique
@@ -42,17 +45,28 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable
 
 /**
- * Mixin into BookViewScreen to add a non-editable translated book on the side
- * when detected language is not the target language.
+ * Mixin into BookEditScreen to add a side-by-side translated book view for editable books
+ * with real-time translation preview and synchronized pagination.
  */
-@Suppress("UnusedPrivateMember", "TooManyFunctions", "LongParameterList", "MagicNumber")
-@Mixin(BookViewScreen::class)
-abstract class BookViewScreenMixin : Screen(Component.empty()) {
-    @Shadow
-    private lateinit var bookAccess: BookViewScreen.BookAccess
-
+@Suppress(
+    "UnusedPrivateMember",
+    "TooManyFunctions",
+    "LongParameterList",
+    "MagicNumber",
+    "LongMethod",
+    "LargeClass",
+    "CyclomaticComplexMethod",
+    "CognitiveComplexMethod",
+    "NestedBlockDepth",
+)
+@Mixin(BookEditScreen::class)
+abstract class BookEditScreenMixin : Screen(Component.empty()) {
     @Shadow
     private var currentPage: Int = 0
+
+    @Shadow
+    @Final
+    private lateinit var pages: List<String>
 
     @Shadow
     private lateinit var forwardButton: PageButton
@@ -60,8 +74,8 @@ abstract class BookViewScreenMixin : Screen(Component.empty()) {
     @Shadow
     private lateinit var backButton: PageButton
 
-    @Unique
-    private var originalAccess: BookViewScreen.BookAccess? = null
+    @Shadow
+    private lateinit var page: MultiLineEditBox
 
     @Unique
     private var translatedAccess: BookViewScreen.BookAccess? = null
@@ -82,7 +96,19 @@ abstract class BookViewScreenMixin : Screen(Component.empty()) {
     private var doneButton: Button? = null
 
     @Unique
+    private var signButton: Button? = null
+
+    @Unique
     private var translatedWidget: TranslatedBookWidget? = null
+
+    @Unique
+    private var lastObservedPages: List<String> = emptyList()
+
+    @Unique
+    private var lastChangeTime: Long = 0L
+
+    @Unique
+    private val debounceMs: Long = 300L
 
     @Shadow
     protected abstract fun backgroundLeft(): Int
@@ -131,48 +157,61 @@ abstract class BookViewScreenMixin : Screen(Component.empty()) {
         }
     }
 
-    @Inject(method = ["createMenuControls"], at = [At("TAIL")])
-    private fun stellarOnCreateMenuControls(ci: CallbackInfo) {
-        for (child in children()) {
-            if (child is Button && child.message.string == CommonComponents.GUI_DONE.string) {
-                doneButton = child
-                break
-            }
-        }
-    }
-
-    @Unique
-    private fun shouldActivateDualBook(orig: BookViewScreen.BookAccess): Boolean {
-        val pages = orig.pages().map { it.string.trim() }
-        if (pages.isEmpty() || pages.all { it.isBlank() }) return false
-        val sample = pages.firstOrNull { it.isNotBlank() } ?: return false
-        val quickLang = TranslationService.detectLanguageQuick(sample)
-        val targetLang = TranslationService.getTargetLanguage()
-        return quickLang == null || !quickLang.equals(targetLang, ignoreCase = true)
-    }
-
     @Inject(method = ["init"], at = [At("TAIL")])
     private fun stellarOnInit(ci: CallbackInfo) {
+        for (child in children()) {
+            if (child is Button && child !is PageButton) {
+                if (child.message.string == CommonComponents.GUI_DONE.string) {
+                    doneButton = child
+                } else {
+                    signButton = child
+                }
+            }
+        }
+
         val config = TranslationService.getConfig()
         if (!config.enabled.value() || !config.translateBooks.value()) return
 
-        val orig = originalAccess ?: bookAccess.also { originalAccess = it }
-        if (!shouldActivateDualBook(orig)) {
+        setupTranslatedBookWidget()
+
+        val currentSnapshot = pages.toList()
+        lastObservedPages = currentSnapshot
+        if (!shouldActivateDualBook(currentSnapshot)) {
             showDualBookState = false
+            updateLayout()
             return
         }
 
         showDualBookState = true
         isTranslating = true
         isFailed = false
-        setupTranslatedBookWidget()
-        requestBookTranslation(orig, forceRetry = false)
+        updateLayout()
+        requestBookTranslation(forceRetry = false)
     }
 
     @Unique
-    private fun requestBookTranslation(orig: BookViewScreen.BookAccess, forceRetry: Boolean) {
+    private fun shouldActivateDualBook(pagesList: List<String>): Boolean {
+        val nonBlank = pagesList.map { it.trim() }.filter { it.isNotBlank() }
+        if (nonBlank.isEmpty()) return false
+        val sample = nonBlank.first()
+        val quickLang = TranslationService.detectLanguageQuick(sample)
+        val targetLang = TranslationService.getTargetLanguage()
+        return quickLang == null || !quickLang.equals(targetLang, ignoreCase = true)
+    }
+
+    @Unique
+    private fun requestBookTranslation(forceRetry: Boolean) {
+        val currentPages = pages.toList()
+        if (currentPages.isEmpty() || currentPages.all { it.isBlank() }) {
+            isTranslating = false
+            showDualBookState = false
+            translatedAccess = null
+            updateLayout()
+            return
+        }
+
         isTranslating = true
-        BookTranslationManager.translateBookDetailedAsync(orig, forceRetry) { result ->
+        BookTranslationManager.translatePagesDetailedAsync(currentPages, forceRetry) { result ->
             val mc = this.minecraft
             mc.execute {
                 isTranslating = false
@@ -183,7 +222,7 @@ abstract class BookViewScreenMixin : Screen(Component.empty()) {
                 } else if (result.isFailed) {
                     showDualBookState = true
                     isFailed = true
-                    translatedAccess = orig
+                    translatedAccess = BookViewScreen.BookAccess(currentPages.map { Component.literal(it) })
                 } else {
                     showDualBookState = true
                     isFailed = false
@@ -217,9 +256,7 @@ abstract class BookViewScreenMixin : Screen(Component.empty()) {
         this.translatedWidget = widget
         this.addRenderableWidget(widget)
 
-        if (shouldShowDualBook()) {
-            updateLayout()
-        }
+        updateLayout()
     }
 
     @Unique
@@ -228,25 +265,55 @@ abstract class BookViewScreenMixin : Screen(Component.empty()) {
         val widget = translatedWidget ?: return
         widget.visible = show
 
+        val hOffset = getHorizontalOffset()
+        val origCenterX = this.width / SCREEN_HALF_DIVISOR - hOffset
+        val rightCenterX = this.width / SCREEN_HALF_DIVISOR + hOffset
+        val widgetWidth = (BOOK_IMAGE_WIDTH * PREVIEW_SCALE_X).toInt()
+        val rightLeft = (rightCenterX - widgetWidth / SCREEN_HALF_DIVISOR).toInt()
+        val rightTop = backgroundTop()
+
+        widget.x = rightLeft
+        widget.y = rightTop
+
+        val bgLeft = backgroundLeft()
+        val bgTop = backgroundTop()
+
+        if (::page.isInitialized) {
+            page.setX(bgLeft + 31)
+            page.setY(bgTop + 26)
+        }
+        if (::forwardButton.isInitialized) {
+            forwardButton.setX(bgLeft + BUTTON_PAGE_FORWARD_X)
+            forwardButton.setY(bgTop + BUTTON_PAGE_Y)
+        }
+        if (::backButton.isInitialized) {
+            backButton.setX(bgLeft + BUTTON_PAGE_BACK_X)
+            backButton.setY(bgTop + BUTTON_PAGE_Y)
+        }
+
+        val btnY = menuControlsTop()
         if (show) {
-            val hOffset = getHorizontalOffset()
-            val rightCenterX = this.width / SCREEN_HALF_DIVISOR + hOffset
-            val widgetWidth = (BOOK_IMAGE_WIDTH * PREVIEW_SCALE_X).toInt()
-            val rightLeft = (rightCenterX - widgetWidth / SCREEN_HALF_DIVISOR).toInt()
-            val rightTop = backgroundTop()
-
-            widget.x = rightLeft
-            widget.y = rightTop
-
-            if (::forwardButton.isInitialized) {
-                forwardButton.setX(backgroundLeft() + BUTTON_PAGE_FORWARD_X)
-                forwardButton.setY(backgroundTop() + BUTTON_PAGE_Y)
+            signButton?.let {
+                it.setX((origCenterX - 100).toInt())
+                it.setY(btnY)
+                it.width = 98
             }
-            if (::backButton.isInitialized) {
-                backButton.setX(backgroundLeft() + BUTTON_PAGE_BACK_X)
-                backButton.setY(backgroundTop() + BUTTON_PAGE_Y)
+            doneButton?.let {
+                it.setX((origCenterX + 2).toInt())
+                it.setY(btnY)
+                it.width = 98
             }
-            doneButton?.setY(menuControlsTop())
+        } else {
+            signButton?.let {
+                it.setX((this.width / SCREEN_HALF_DIVISOR - 100).toInt())
+                it.setY(btnY)
+                it.width = 98
+            }
+            doneButton?.let {
+                it.setX((this.width / SCREEN_HALF_DIVISOR + 2).toInt())
+                it.setY(btnY)
+                it.width = 98
+            }
         }
     }
 
@@ -261,18 +328,36 @@ abstract class BookViewScreenMixin : Screen(Component.empty()) {
         partialTick: Float,
         ci: CallbackInfo,
     ) {
+        val config = TranslationService.getConfig()
+        if (!config.enabled.value() || !config.translateBooks.value()) return
+
+        // Live real-time preview detection on text modifications
+        val currentSnapshot = pages.toList()
+        if (currentSnapshot != lastObservedPages) {
+            lastObservedPages = currentSnapshot
+            lastChangeTime = System.currentTimeMillis()
+        } else if (lastChangeTime != 0L && System.currentTimeMillis() - lastChangeTime >= debounceMs) {
+            lastChangeTime = 0L
+            if (shouldActivateDualBook(currentSnapshot)) {
+                showDualBookState = true
+                requestBookTranslation(forceRetry = false)
+            } else {
+                showDualBookState = false
+                translatedAccess = null
+                updateLayout()
+            }
+        }
+
         if (!shouldShowDualBook()) return
 
         if (isFailed && !isTranslating) {
             val now = System.currentTimeMillis()
             if (now - lastRetryTime >= BOOK_RETRY_INTERVAL_MS) {
                 lastRetryTime = now
-                val orig = originalAccess ?: bookAccess
-                requestBookTranslation(orig, forceRetry = true)
+                requestBookTranslation(forceRetry = true)
             }
         }
 
-        val config = TranslationService.getConfig()
         val hOffset = getHorizontalOffset()
         val origCenterX = this.width / SCREEN_HALF_DIVISOR - hOffset
         val rightCenterX = this.width / SCREEN_HALF_DIVISOR + hOffset

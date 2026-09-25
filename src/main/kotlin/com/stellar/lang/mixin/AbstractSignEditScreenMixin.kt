@@ -83,10 +83,14 @@ abstract class AbstractSignEditScreenMixin : Screen(Component.empty()) {
         )
 
         val langCode = TranslationService.getTargetLanguage().uppercase()
-        val badge = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(
-            SignEditPreviewManager.hasFailed.get(),
-            trailingSpace = true,
-        )
+        val badge = if (SignEditPreviewManager.isTranslating.get()) {
+            com.stellar.lang.badge.TranslationBadgeHelper.createTranslatingBadge(trailingSpace = true)
+        } else {
+            com.stellar.lang.badge.TranslationBadgeHelper.createBadge(
+                SignEditPreviewManager.hasFailed.get(),
+                trailingSpace = true,
+            )
+        }
         val header = Component.empty().append(badge)
             .append(Component.literal("Translated ($langCode)").withStyle(ChatFormatting.WHITE))
         extractor.centeredText(

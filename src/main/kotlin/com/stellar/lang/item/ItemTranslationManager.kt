@@ -13,8 +13,10 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object ItemTranslationManager {
     private const val MIN_TRANSLATABLE_LENGTH = 2
+    private const val ACCESS_RETRY_COOLDOWN_MS = 5_000L
     private val itemCache = ConcurrentHashMap<String, Component>()
     internal val failedItems = ConcurrentHashMap.newKeySet<String>()
+    private val lastItemRetryTimes = ConcurrentHashMap<String, Long>()
 
     init {
         TranslationService.addSuccessListener { result ->
@@ -33,6 +35,7 @@ object ItemTranslationManager {
     fun clearCache() {
         itemCache.clear()
         failedItems.clear()
+        lastItemRetryTimes.clear()
     }
 
     private fun getValidCachedItem(cacheKey: String, plainText: String, targetLang: String): Component? {
@@ -52,6 +55,10 @@ object ItemTranslationManager {
         val targetLang = TranslationService.getTargetLanguage()
         val cacheKey = "$targetLang::${plainText.hashCode()}"
 
+        if (TranslationService.isInFlight(plainText, targetLang)) {
+            return createTranslatingName(plainText)
+        }
+
         val cached = getValidCachedItem(cacheKey, plainText, targetLang)
         if (cached != null) return cached
 
@@ -63,10 +70,11 @@ object ItemTranslationManager {
         if (!config.enabled.value() || !config.translateItems.value()) return null
 
         val text = original.string.trim()
-        return if (text.length < MIN_TRANSLATABLE_LENGTH || text.startsWith("[T]")) null else text
+        val isBadgePrefix = text.startsWith("[T]") || text.startsWith("[...]")
+        return if (text.length < MIN_TRANSLATABLE_LENGTH || isBadgePrefix) null else text
     }
 
-    @Suppress("ReturnCount")
+    @Suppress("ReturnCount", "CyclomaticComplexMethod", "CognitiveComplexMethod")
     private fun resolveItemTranslation(
         plainText: String,
         targetLang: String,
@@ -82,11 +90,24 @@ object ItemTranslationManager {
             return comp
         }
 
-        if (TranslationService.isFailed(plainText, targetLang)) {
-            val failedComp = createFailedName(plainText)
-            failedItems.add(cacheKey)
-            itemCache[cacheKey] = failedComp
-            return failedComp
+        val isFailed = failedItems.contains(cacheKey) || TranslationService.isFailed(plainText, targetLang)
+        if (isFailed && !TranslationService.isInFlight(plainText, targetLang)) {
+            val now = System.currentTimeMillis()
+            val lastRetry = lastItemRetryTimes[cacheKey] ?: 0L
+            if (now - lastRetry >= ACCESS_RETRY_COOLDOWN_MS) {
+                lastItemRetryTimes[cacheKey] = now
+                TranslationService.translateAsync(plainText, forceRetry = true) { result ->
+                    if (result != null && !result.isSameLanguage) {
+                        failedItems.remove(cacheKey)
+                        itemCache[cacheKey] = createFormattedName(result.translatedText)
+                    } else if (result == null) {
+                        failedItems.add(cacheKey)
+                        itemCache[cacheKey] = createFailedName(plainText)
+                    }
+                }
+                return createTranslatingName(plainText)
+            }
+            return createFailedName(plainText)
         }
 
         TranslationService.translateAsync(plainText) { result ->
@@ -104,6 +125,11 @@ object ItemTranslationManager {
     private fun createFormattedName(translatedText: String): MutableComponent {
         val badge = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(failed = false, trailingSpace = true)
         return Component.empty().append(badge).append(Component.literal(translatedText))
+    }
+
+    private fun createTranslatingName(originalText: String): MutableComponent {
+        val badge = com.stellar.lang.badge.TranslationBadgeHelper.createTranslatingBadge(trailingSpace = true)
+        return Component.empty().append(badge).append(Component.literal(originalText))
     }
 
     private fun createFailedName(originalText: String): MutableComponent {

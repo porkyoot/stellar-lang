@@ -7,6 +7,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.collections.shouldBeEmpty
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.string.shouldContain
 import java.net.InetSocketAddress
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -517,6 +518,40 @@ class TranslationServiceSpec : FunSpec({
         outcome?.isFailure shouldBe true
     }
 
+    test("testOnnx reports success when test models are ready") {
+        val testModelsDir = java.io.File("src/test/resources/test_models")
+        val config = TranslationService.getConfig()
+        config.onnxModelDir.setValue(testModelsDir.absolutePath, false)
+        com.stellar.lang.plugin.onnx.OnnxInferenceEngine.resetSessions()
+
+        val latch = CountDownLatch(1)
+        var outcome: Result<String>? = null
+        TranslationService.testOnnx("es") { res ->
+            outcome = res
+            latch.countDown()
+        }
+        latch.await(5, TimeUnit.SECONDS) shouldBe true
+        outcome?.isSuccess shouldBe true
+        val info = outcome?.getOrNull() ?: ""
+        info shouldContain "Det: 'Bonjour' ->"
+        info shouldContain "Trans: 'Hello' ->"
+    }
+
+    test("testOnnx reports failure when models directory is missing models") {
+        val config = TranslationService.getConfig()
+        config.onnxModelDir.setValue("build/non_existent_models_dir", false)
+        com.stellar.lang.plugin.onnx.OnnxInferenceEngine.resetSessions()
+
+        val latch = CountDownLatch(1)
+        var outcome: Result<String>? = null
+        TranslationService.testOnnx { res ->
+            outcome = res
+            latch.countDown()
+        }
+        latch.await(5, TimeUnit.SECONDS) shouldBe true
+        outcome?.isFailure shouldBe true
+    }
+
     test("normalizeLanguageCode maps various Minecraft language codes properly") {
         TranslationService.normalizeLanguageCode("en_us") shouldBe "en"
         TranslationService.normalizeLanguageCode("en_gb") shouldBe "en"
@@ -896,5 +931,158 @@ class TranslationServiceSpec : FunSpec({
 
         config.translationPlugin.setValue("libretranslate", false)
         config.detectionPlugin.setValue("libretranslate", false)
+    }
+
+    test("TranslationService falls back to LibreTranslate when onnx translator cannot translate") {
+        val config = TranslationService.getConfig()
+        config.translationPlugin.setValue("onnx", false)
+        config.detectionPlugin.setValue("libretranslate", false)
+        config.onnxModelDir.setValue("build/no_models", false)
+
+        responseBody = """{"translatedText": "Fallback Success", "detectedLanguage": "fr"}"""
+
+        val latch = CountDownLatch(1)
+        var result: TranslationResult? = null
+
+        TranslationService.translateAsync("Bonjour le monde") { res ->
+            result = res
+            latch.countDown()
+        }
+
+        latch.await(3, TimeUnit.SECONDS) shouldBe true
+        result shouldNotBe null
+        result?.translatedText shouldBe "Fallback Success"
+
+        responseBody = """{"translatedText": ["Fallback Success"], "detectedLanguage": "fr"}"""
+        val batchRes = TranslationService.translateBatchSync(listOf("Bonjour"))
+        batchRes shouldNotBe null
+        batchRes?.firstOrNull()?.translatedText shouldBe "Fallback Success"
+
+        config.translationPlugin.setValue("libretranslate", false)
+    }
+
+    test("TranslationService with custom successful plugins handles single and batch") {
+        val successTranslator = object : com.stellar.lang.plugin.TranslationPlugin {
+            override val id = "success_mock"
+            override val displayName = "Success Mock"
+            override val description = "Mock"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready("Ready")
+            override suspend fun translate(text: String, sourceLang: String?, targetLang: String): String? {
+                return "Mock: $text"
+            }
+            override suspend fun translateBatch(
+                texts: List<String>,
+                sourceLang: String?,
+                targetLang: String,
+            ): List<String> {
+                return texts.map { "BatchMock: $it" }
+            }
+        }
+
+        val successDetector = object : com.stellar.lang.plugin.LanguageDetectorPlugin {
+            override val id = "success_detector"
+            override val displayName = "Success Detector"
+            override val description = "Mock"
+            override fun getStatus() = com.stellar.lang.plugin.PluginStatus.Ready("Ready")
+            override suspend fun detectLanguage(text: String): String {
+                return if (text == "SameLang") "es" else "fr"
+            }
+        }
+
+        com.stellar.lang.plugin.PluginRegistry.registerTranslator(successTranslator)
+        com.stellar.lang.plugin.PluginRegistry.registerDetector(successDetector)
+
+        val config = TranslationService.getConfig()
+        config.translationPlugin.setValue("success_mock", false)
+        config.detectionPlugin.setValue("success_detector", false)
+        config.targetLanguage.setValue("es", false)
+
+        val latch = CountDownLatch(2)
+        var singleRes: TranslationResult? = null
+        var sameLangRes: TranslationResult? = null
+
+        TranslationService.translateAsync("Hello") { res ->
+            singleRes = res
+            latch.countDown()
+        }
+        TranslationService.translateAsync("SameLang") { res ->
+            sameLangRes = res
+            latch.countDown()
+        }
+
+        latch.await(3, TimeUnit.SECONDS) shouldBe true
+        singleRes shouldNotBe null
+        singleRes?.translatedText shouldBe "Mock: Hello"
+        singleRes?.isSameLanguage shouldBe false
+
+        sameLangRes shouldNotBe null
+        sameLangRes?.isSameLanguage shouldBe true
+
+        // Batch different language
+        val batchRes = TranslationService.translateBatchSync(listOf("A", "B"))
+        batchRes shouldNotBe null
+        batchRes?.size shouldBe 2
+        batchRes?.get(0)?.translatedText shouldBe "BatchMock: A"
+        batchRes?.get(0)?.isSameLanguage shouldBe false
+
+        // Batch same language
+        val sameBatchRes = TranslationService.translateBatchSync(listOf("SameLang", "SameLang"))
+        sameBatchRes shouldNotBe null
+        sameBatchRes?.size shouldBe 2
+        sameBatchRes?.get(0)?.isSameLanguage shouldBe true
+
+        config.translationPlugin.setValue("libretranslate", false)
+        config.detectionPlugin.setValue("libretranslate", false)
+    }
+
+    test("parseSingleResponse handles json array translatedText or invalid formats") {
+        val arrayJson = """{"translatedText": ["Translated"], "detectedLanguage": "es"}"""
+        val res1 = TranslationService.parseSingleResponse(arrayJson, "Original", "en")
+        res1 shouldNotBe null
+        res1?.translatedText shouldBe "Translated"
+
+        val emptyArrayJson = """{"translatedText": [], "detectedLanguage": "es"}"""
+        val res2 = TranslationService.parseSingleResponse(emptyArrayJson, "Original", "en")
+        res2 shouldBe null
+
+        val missingJson = """{"other": "value"}"""
+        val res3 = TranslationService.parseSingleResponse(missingJson, "Original", "en")
+        res3 shouldBe null
+    }
+
+    test("TranslationService translates through ONNX model end-to-end") {
+        val testModelsDir = java.io.File("src/test/resources/test_models")
+        val config = TranslationService.getConfig()
+        config.translationPlugin.setValue("onnx", false)
+        config.detectionPlugin.setValue("onnx", false)
+        config.targetLanguage.setValue("es", false)
+        config.onnxModelDir.setValue(testModelsDir.absolutePath, false)
+        com.stellar.lang.plugin.onnx.OnnxInferenceEngine.resetSessions()
+
+        val latch = CountDownLatch(1)
+        var singleRes: TranslationResult? = null
+
+        TranslationService.translateAsync("hello world") { res ->
+            singleRes = res
+            latch.countDown()
+        }
+
+        latch.await(3, TimeUnit.SECONDS) shouldBe true
+        singleRes shouldNotBe null
+        singleRes?.translatedText shouldBe "hola mundo"
+        singleRes?.isSameLanguage shouldBe false
+        singleRes?.targetLanguage shouldBe "es"
+
+        val batchRes = TranslationService.translateBatchSync(listOf("hello", "world"))
+        batchRes shouldNotBe null
+        batchRes?.size shouldBe 2
+        batchRes?.get(0)?.translatedText shouldBe "hola"
+        batchRes?.get(0)?.isSameLanguage shouldBe false
+        batchRes?.get(1)?.translatedText shouldBe "mundo"
+        batchRes?.get(1)?.isSameLanguage shouldBe false
+
+        config.translationPlugin.setValue("libretranslate", false)
+        config.detectionPlugin.setValue("libretranslate", false)
+        com.stellar.lang.plugin.onnx.OnnxInferenceEngine.resetSessions()
     }
 })

@@ -20,6 +20,8 @@ object SignTranslationManager {
     internal val textOutcomeCache = ConcurrentHashMap<String, SignFormatHelper.SignTranslationOutcome>()
     internal val signCache = ConcurrentHashMap<String, SignText>()
     internal val failedSignKeys = ConcurrentHashMap.newKeySet<String>()
+    private const val ACCESS_RETRY_COOLDOWN_MS = 5_000L
+    private val lastSignRetryTimes = ConcurrentHashMap<String, Long>()
 
     init {
         TranslationService.addSuccessListener { result ->
@@ -49,8 +51,9 @@ object SignTranslationManager {
         translateSignText(signText)
     }
 
-    @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod")
-    fun translateSignText(signText: SignText) {
+    @JvmOverloads
+    @Suppress("CognitiveComplexMethod", "CyclomaticComplexMethod", "ReturnCount")
+    fun translateSignText(signText: SignText, forceRetry: Boolean = false) {
         val config = TranslationService.getConfig()
         if (!config.enabled.value() || !config.translateSigns.value()) return
 
@@ -69,7 +72,17 @@ object SignTranslationManager {
             return
         }
 
-        TranslationService.translateAsync(sentence) { result ->
+        val isFailed = failedSignKeys.contains(textKey) || TranslationService.isFailed(sentence, targetLang)
+        if (isFailed) {
+            if (!forceRetry) return
+            val now = System.currentTimeMillis()
+            val lastRetry = lastSignRetryTimes[textKey] ?: 0L
+            if (now - lastRetry < ACCESS_RETRY_COOLDOWN_MS) return
+            lastSignRetryTimes[textKey] = now
+            failedSignKeys.remove(textKey)
+        }
+
+        TranslationService.translateAsync(sentence, forceRetry = forceRetry) { result ->
             if (result != null && !result.isSameLanguage) {
                 textOutcomeCache[textKey] = applyTranslatedLinesWithOutcome(signText, result.translatedText)
                 failedSignKeys.remove(textKey)
@@ -77,6 +90,18 @@ object SignTranslationManager {
                 failedSignKeys.add(textKey)
             }
         }
+    }
+
+    fun isTranslating(signText: SignText): Boolean {
+        val sentence = extractSentence(signText)
+        if (sentence.isBlank()) return false
+        val targetLang = TranslationService.getTargetLanguage()
+        return TranslationService.isInFlight(sentence, targetLang)
+    }
+
+    fun isTranslating(sign: SignBlockEntity, isFront: Boolean): Boolean {
+        val text = if (isFront) sign.frontText else sign.backText
+        return isTranslating(text)
     }
 
     fun isFailed(signText: SignText): Boolean {
@@ -149,13 +174,8 @@ object SignTranslationManager {
         val text = if (isFront) sign.frontText else sign.backText
         val translated = getTranslatedSignText(text)
         if (translated == null) {
-            val sentence = extractSentence(text)
-            val targetLang = TranslationService.getTargetLanguage()
-            val textKey = buildTextKey(targetLang, sentence)
-            if (!TranslationService.isFailed(sentence, targetLang)) {
-                failedSignKeys.remove(textKey)
-                translateSignText(text)
-            }
+            val isFailed = isFailed(text)
+            translateSignText(text, forceRetry = isFailed)
         }
         return translated
     }
@@ -178,6 +198,7 @@ object SignTranslationManager {
         textOutcomeCache.clear()
         signCache.clear()
         failedSignKeys.clear()
+        lastSignRetryTimes.clear()
     }
 
     fun applyTranslatedLines(originalText: SignText, translatedSentence: String): SignText {

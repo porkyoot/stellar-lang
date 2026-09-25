@@ -2,6 +2,7 @@
     "LargeClass",
     "LongMethod",
     "StringLiteralDuplication",
+    "TooManyFunctions",
 )
 
 package com.stellar.lang.config
@@ -222,8 +223,11 @@ object LangClothConfigScreen {
             .setSaveConsumer { value -> config.onnxExecutionThreads.setValue(value, true) }
             .build()
 
+        val testOnnxButton = buildTestOnnxButton(entries)
+
         subCategory.add(statusDescription)
         subCategory.add(downloadButton)
+        subCategory.add(testOnnxButton)
         subCategory.add(autoDownload)
         subCategory.add(modelDir)
         subCategory.add(threads)
@@ -354,6 +358,63 @@ object LangClothConfigScreen {
                     val msg = err.message ?: err::class.simpleName ?: "Connection failed"
                     onUpdate("❌ Failed (Click to Retry)", msg)
                     showToast("Stellar Lang", "Test Failed: $msg")
+                },
+            )
+        }
+    }
+
+    private fun buildTestOnnxButton(
+        entries: ConfigEntryBuilder,
+    ): me.shedaniel.clothconfig2.api.AbstractConfigListEntry<*> {
+        var lastToggleValue = false
+        var testStatus = "Click to Test ONNX"
+        var testError: String? = null
+
+        return entries
+            .startBooleanToggle(Component.literal("Test ONNX Models"), false)
+            .setYesNoTextSupplier { boolValue ->
+                if (boolValue != lastToggleValue) {
+                    lastToggleValue = boolValue
+                    val now = System.currentTimeMillis()
+                    if (now - lastTestTimeMs >= TEST_DEBOUNCE_MS && isTesting.compareAndSet(false, true)) {
+                        lastTestTimeMs = now
+                        testStatus = "⌛ Testing ONNX..."
+                        testError = null
+                        triggerOnnxTest { status, error ->
+                            testStatus = status
+                            testError = error
+                            isTesting.set(false)
+                        }
+                    }
+                }
+                Component.literal(testStatus)
+            }
+            .setErrorSupplier { _ ->
+                testError?.let {
+                    java.util.Optional.of(Component.literal("Error: $it"))
+                } ?: java.util.Optional.empty()
+            }
+            .setTooltip(
+                Component.literal("Click to test local ONNX language detection and translation models"),
+            )
+            .build()
+    }
+
+    private fun triggerOnnxTest(
+        onUpdate: (String, String?) -> Unit,
+    ) {
+        TranslationService.testOnnx(
+            targetLang = TranslationService.getTargetLanguage(),
+        ) { result ->
+            result.fold(
+                onSuccess = { info ->
+                    onUpdate("✅ OK ($info)", null)
+                    showToast("Stellar Lang", "ONNX OK: $info")
+                },
+                onFailure = { err ->
+                    val msg = err.message ?: err::class.simpleName ?: "Test failed"
+                    onUpdate("❌ Failed (Click to Retry)", msg)
+                    showToast("Stellar Lang", "ONNX Test Failed: $msg")
                 },
             )
         }

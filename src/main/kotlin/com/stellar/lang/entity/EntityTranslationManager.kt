@@ -17,6 +17,8 @@ object EntityTranslationManager {
     // Cache is strictly for TEXT: "$targetLang::$plainText" -> Component
     internal val textComponentCache = ConcurrentHashMap<String, Component>()
     internal val failedEntities = ConcurrentHashMap.newKeySet<String>()
+    private const val ACCESS_RETRY_COOLDOWN_MS = 5_000L
+    private val lastEntityRetryTimes = ConcurrentHashMap<String, Long>()
 
     init {
         TranslationService.addSuccessListener { result ->
@@ -79,9 +81,23 @@ object EntityTranslationManager {
         val targetLang = TranslationService.getTargetLanguage()
         val textKey = "$targetLang::$plainText"
 
+        if (TranslationService.isInFlight(plainText, targetLang)) {
+            return createTranslatingName(plainText)
+        }
+
         val cached = getValidCachedEntity(textKey, plainText, targetLang)
         if (cached != null) return cached
 
+        return resolveEntityTranslation(plainText, targetLang, textKey, original)
+    }
+
+    @Suppress("ReturnCount", "CognitiveComplexMethod", "CyclomaticComplexMethod")
+    private fun resolveEntityTranslation(
+        plainText: String,
+        targetLang: String,
+        textKey: String,
+        original: Component,
+    ): Component {
         val cachedResult = TranslationService.getCached(plainText, targetLang)
         if (cachedResult != null) {
             if (cachedResult.isSameLanguage) return original
@@ -91,11 +107,24 @@ object EntityTranslationManager {
             return comp
         }
 
-        if (TranslationService.isFailed(plainText, targetLang)) {
-            val failedComp = createFailedName(plainText)
-            failedEntities.add(textKey)
-            textComponentCache[textKey] = failedComp
-            return failedComp
+        val isFailed = failedEntities.contains(textKey) || TranslationService.isFailed(plainText, targetLang)
+        if (isFailed && !TranslationService.isInFlight(plainText, targetLang)) {
+            val now = System.currentTimeMillis()
+            val lastRetry = lastEntityRetryTimes[textKey] ?: 0L
+            if (now - lastRetry >= ACCESS_RETRY_COOLDOWN_MS) {
+                lastEntityRetryTimes[textKey] = now
+                TranslationService.translateAsync(plainText, forceRetry = true) { result ->
+                    if (result != null && !result.isSameLanguage) {
+                        failedEntities.remove(textKey)
+                        textComponentCache[textKey] = createFormattedName(result.translatedText)
+                    } else if (result == null) {
+                        failedEntities.add(textKey)
+                        textComponentCache[textKey] = createFailedName(plainText)
+                    }
+                }
+                return createTranslatingName(plainText)
+            }
+            return createFailedName(plainText)
         }
 
         onEntityNameChanged(original)
@@ -105,6 +134,7 @@ object EntityTranslationManager {
     fun clearCache() {
         textComponentCache.clear()
         failedEntities.clear()
+        lastEntityRetryTimes.clear()
     }
 
     private fun getTranslatableText(original: Component): String? {
@@ -115,12 +145,18 @@ object EntityTranslationManager {
         if (disabled) return null
 
         val text = original.string.trim()
-        return if (text.length < MIN_TRANSLATABLE_LENGTH || text.startsWith("[T]")) null else text
+        val isBadgePrefix = text.startsWith("[T]") || text.startsWith("[...]")
+        return if (text.length < MIN_TRANSLATABLE_LENGTH || isBadgePrefix) null else text
     }
 
     private fun createFormattedName(translatedText: String): MutableComponent {
         val badge = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(failed = false, trailingSpace = true)
         return Component.empty().append(badge).append(Component.literal(translatedText))
+    }
+
+    private fun createTranslatingName(originalText: String): MutableComponent {
+        val badge = com.stellar.lang.badge.TranslationBadgeHelper.createTranslatingBadge(trailingSpace = true)
+        return Component.empty().append(badge).append(Component.literal(originalText))
     }
 
     private fun createFailedName(originalText: String): MutableComponent {

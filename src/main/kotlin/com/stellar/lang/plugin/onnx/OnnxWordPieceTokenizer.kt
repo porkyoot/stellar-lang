@@ -24,19 +24,74 @@ internal object OnnxWordPieceTokenizer {
             val jsonText = vocabFile.readText(Charsets.UTF_8)
             val jsonObject = JsonParser.parseString(jsonText).asJsonObject
             val modelObj = jsonObject.getAsJsonObject("model")
-            val vocabObj = modelObj?.getAsJsonObject("vocab")
-            if (vocabObj != null) {
+            val vocabElem = modelObj?.get("vocab")
+            if (vocabElem != null && vocabElem.isJsonObject) {
+                val vocabObj = vocabElem.asJsonObject
                 val map = HashMap<String, Int>(vocabObj.size())
                 for (entry in vocabObj.entrySet()) {
                     map[entry.key] = entry.value.asInt
                 }
                 map
+            } else if (vocabElem != null && vocabElem.isJsonArray) {
+                val vocabArray = vocabElem.asJsonArray
+                if (vocabArray.size() > 0) {
+                    val map = HashMap<String, Int>(vocabArray.size())
+                    for (i in 0 until vocabArray.size()) {
+                        val item = vocabArray[i]
+                        if (item.isJsonArray) {
+                            map[item.asJsonArray[0].asString] = i
+                        }
+                    }
+                    map
+                } else {
+                    null
+                }
             } else {
                 null
             }
         }.onFailure { ex ->
             logger.warn("Failed to load tokenizer vocab from {}: {}", vocabFile.name, ex.message)
         }.getOrNull()
+    }
+
+    fun isSentencePiece(vocab: Map<String, Int>): Boolean =
+        !vocab.containsKey("[CLS]") && (vocab.containsKey("</s>") || vocab.keys.any { it.startsWith("\u2581") })
+
+    fun tokenizeSentencePiece(text: String, maxLen: Int, vocab: Map<String, Int>): LongArray {
+        val eosId = (vocab["</s>"] ?: 0).toLong()
+        val unkId = (vocab["<unk>"] ?: 1).toLong()
+        val words = text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+        val tokens = mutableListOf<Long>()
+
+        for (word in words) {
+            if (tokens.size >= maxLen - 1) break
+            val target = "\u2581$word"
+            var start = 0
+            val len = target.length
+            while (start < len) {
+                var end = len
+                var foundId: Int? = null
+                while (start < end) {
+                    val sub = target.substring(start, end)
+                    val id = vocab[sub]
+                    if (id != null) {
+                        foundId = id
+                        break
+                    }
+                    end--
+                }
+                if (foundId != null) {
+                    tokens.add(foundId.toLong())
+                    start = end
+                } else {
+                    tokens.add(unkId)
+                    start++
+                }
+                if (tokens.size >= maxLen - 1) break
+            }
+        }
+        tokens.add(eosId)
+        return tokens.take(maxLen).toLongArray()
     }
 
     fun normalize(text: String): String {
@@ -117,4 +172,38 @@ internal object OnnxWordPieceTokenizer {
         }
         return subTokens
     }
+
+    fun detokenize(tokens: LongArray, vocab: Map<String, Int>): String {
+        val idToToken = HashMap<Int, String>(vocab.size)
+        for ((k, v) in vocab) {
+            idToToken[v] = k
+        }
+        val isSp = isSentencePiece(vocab)
+        val sb = StringBuilder()
+        for (token in tokens) {
+            val piece = idToToken[token.toInt()]
+            if (piece != null && !isSpecialToken(piece)) {
+                when {
+                    piece.startsWith("##") -> sb.append(piece.substring(2))
+                    piece.startsWith("\u2581") -> {
+                        if (sb.isNotEmpty()) sb.append(' ')
+                        sb.append(piece.substring(1))
+                    }
+                    else -> {
+                        val isPunct = piece.length == 1 && !piece[0].isLetterOrDigit()
+                        val shouldPrependSpace = !isSp && sb.isNotEmpty()
+                        if (shouldPrependSpace && !isPunct) {
+                            sb.append(' ')
+                        }
+                        sb.append(piece)
+                    }
+                }
+            }
+        }
+        return sb.toString().trim()
+    }
+
+    private fun isSpecialToken(piece: String): Boolean =
+        piece.startsWith("[") && piece.endsWith("]") ||
+            piece.startsWith("<") && piece.endsWith(">")
 }

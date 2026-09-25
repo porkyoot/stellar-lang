@@ -27,6 +27,16 @@ object BookTranslationManager {
         }
     }
 
+    fun translatePagesDetailedAsync(
+        pages: List<String>,
+        forceRetry: Boolean = false,
+        callback: (BookTranslationResult) -> Unit,
+    ) {
+        val components = pages.map { Component.literal(it) }
+        val bookAccess = BookViewScreen.BookAccess(components)
+        translateBookDetailedAsync(bookAccess, forceRetry, callback)
+    }
+
     fun translateBookDetailedAsync(
         bookAccess: BookViewScreen.BookAccess,
         forceRetry: Boolean = false,

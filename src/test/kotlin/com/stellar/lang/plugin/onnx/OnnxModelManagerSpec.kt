@@ -8,6 +8,7 @@ import com.sun.net.httpserver.HttpServer
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
+import io.kotest.matchers.string.shouldContain
 import java.io.File
 import java.net.InetSocketAddress
 import java.util.concurrent.CountDownLatch
@@ -80,6 +81,29 @@ class OnnxModelManagerSpec : FunSpec({
         OnnxModelManager.isTranslationModelReady("fr") shouldBe true
         OnnxModelManager.getTranslationStatus("fr") shouldBe PluginStatus.Ready("Model for 'fr' ready")
 
+        val encoderModelFile = File("src/test/resources/test_models/detection/model.onnx")
+        if (encoderModelFile.exists()) {
+            val deModel = OnnxModelManager.getTranslationModelFile("de")
+            deModel.parentFile.mkdirs()
+            encoderModelFile.copyTo(deModel, overwrite = true)
+            OnnxModelManager.isTranslationModelReady("de") shouldBe true
+            OnnxModelManager.getTranslationStatus("de") shouldBe
+                PluginStatus.NotConfigured("Translation model for 'de' is encoder-only (decoder required)")
+
+            val decModel = OnnxModelManager.getTranslationDecoderFile("de")
+            encoderModelFile.copyTo(decModel, overwrite = true)
+            OnnxModelManager.isDecoderReady("de") shouldBe true
+            OnnxModelManager.isEncoderOnlyModel("de") shouldBe false
+            OnnxModelManager.getTranslationStatus("de") shouldBe PluginStatus.Ready("Model for 'de' ready")
+            decModel.delete()
+            deModel.delete()
+        }
+
+        OnnxModelManager.getTranslationDecoderUrl("en") shouldContain "decoder_model_quantized.onnx"
+        OnnxModelManager.getTranslationVocabUrl("en") shouldContain "tokenizer.json"
+        OnnxModelManager.getTranslationDecoderFile("en").name shouldBe "decoder.onnx"
+        OnnxModelManager.isDecoderReady("non_existent") shouldBe false
+
         // Clean up dummy files
         detModel.delete()
         transModel.delete()
@@ -93,6 +117,8 @@ class OnnxModelManagerSpec : FunSpec({
         OnnxModelManager.downloadTranslationModelAsync(
             targetLang = "es",
             modelUrl = "http://127.0.0.1:$serverPort/dummy_model.onnx",
+            decoderUrl = "http://127.0.0.1:$serverPort/dummy_model.onnx",
+            vocabUrl = "http://127.0.0.1:$serverPort/dummy_model.onnx",
             onProgress = { pct -> lastProgress = pct },
             onComplete = { res ->
                 downloadedResult = res
@@ -106,6 +132,7 @@ class OnnxModelManagerSpec : FunSpec({
         downloadedResult?.getOrNull()?.exists() shouldBe true
         lastProgress shouldBe 100
         OnnxModelManager.isTranslationModelReady("es") shouldBe true
+        OnnxModelManager.isDecoderReady("es") shouldBe true
     }
 
     test("downloadTranslationModelAsync handles HTTP error properly") {

@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit
 /**
  * Service managing communication with LibreTranslate API, caching, and language detection.
  */
-@Suppress("TooManyFunctions")
+@Suppress("TooManyFunctions", "LongMethod", "CyclomaticComplexMethod")
 object TranslationService {
     private val logger: Logger = LoggerFactory.getLogger(StellarLangMod.MOD_ID)
     private val gson = Gson()
@@ -129,8 +129,18 @@ object TranslationService {
         TranslationCache.put(result)
     }
 
+    fun isInFlight(text: String, targetLang: String = getTargetLanguage()): Boolean {
+        val key = TranslationCache.cacheKey(text.trim(), targetLang)
+        return TranslationCache.isInFlight(key)
+    }
+
+    @JvmOverloads
     @Suppress("ReturnCount")
-    fun translateAsync(text: String, callback: (TranslationResult?) -> Unit) {
+    fun translateAsync(
+        text: String,
+        forceRetry: Boolean = false,
+        callback: (TranslationResult?) -> Unit,
+    ) {
         val trimmed = text.trim()
         val config = getConfig()
         if (trimmed.isEmpty() || !config.enabled.value()) {
@@ -146,7 +156,9 @@ object TranslationService {
         }
 
         val key = TranslationCache.cacheKey(trimmed, targetLang)
-        if (TranslationCache.isCircuitBreakerOpen() || TranslationCache.isThrottled(key)) {
+        if (forceRetry) {
+            TranslationCache.removeFailed(key)
+        } else if (TranslationCache.isCircuitBreakerOpen() || TranslationCache.isThrottled(key)) {
             callback(null)
             return
         }
@@ -264,6 +276,8 @@ object TranslationService {
                             targetLanguage = targetLang,
                             isSameLanguage = false,
                         )
+                    } else if (translator is com.stellar.lang.plugin.onnx.OnnxTranslationPlugin) {
+                        executeTranslation(text, config.apiHost.value(), config.apiKey.value(), targetLang)
                     } else {
                         null
                     }
@@ -296,9 +310,9 @@ object TranslationService {
                     }
                 } else {
                     val translatedList = translator.translateBatch(texts, detected, targetLang)
-                    if (translatedList != null) {
+                    if (isBatchSuccess(translator, translatedList, texts)) {
                         texts.mapIndexed { index, original ->
-                            val trans = translatedList.getOrElse(index) { original }
+                            val trans = translatedList?.getOrElse(index) { original } ?: original
                             TranslationResult(
                                 originalText = original,
                                 translatedText = trans,
@@ -307,6 +321,8 @@ object TranslationService {
                                 isSameLanguage = false,
                             )
                         }
+                    } else if (translator is com.stellar.lang.plugin.onnx.OnnxTranslationPlugin) {
+                        executeBatchTranslation(texts, config.apiHost.value(), config.apiKey.value(), targetLang)
                     } else {
                         null
                     }
@@ -315,6 +331,17 @@ object TranslationService {
                 logger.warn("Batch translation failed: {}", ex.message)
             }.getOrNull()
         }
+    }
+
+    private fun isBatchSuccess(
+        translator: com.stellar.lang.plugin.TranslationPlugin,
+        translatedList: List<String>?,
+        originalTexts: List<String>,
+    ): Boolean {
+        if (translatedList == null) return false
+        val isFailedOnnx = translator is com.stellar.lang.plugin.onnx.OnnxTranslationPlugin &&
+            translatedList == originalTexts
+        return !isFailedOnnx
     }
 
     fun translateBatchAsync(texts: List<String>, callback: (List<TranslationResult>?) -> Unit) {
@@ -429,7 +456,12 @@ object TranslationService {
     fun parseSingleResponse(body: String, originalText: String, targetLang: String): TranslationResult? {
         return runCatching {
             val json = JsonParser.parseString(body).asJsonObject
-            val translated = json.get("translatedText")?.asString ?: return null
+            val transElem = json.get("translatedText") ?: return null
+            val translated = if (transElem.isJsonArray) {
+                transElem.asJsonArray.firstOrNull()?.asString ?: return null
+            } else {
+                transElem.asString
+            }
             val detected = parseDetectedLanguage(json)
             val isSame = detected.equals(targetLang, ignoreCase = true)
             TranslationResult(
@@ -578,6 +610,45 @@ object TranslationService {
                     }.getOrNull() ?: response.body().take(ERROR_SNIPPET_LENGTH)
                     error("HTTP ${response.statusCode()}: $msg")
                 }
+            }
+            callback(outcome)
+        }
+    }
+
+    fun testOnnx(
+        targetLang: String = getTargetLanguage(),
+        callback: (Result<String>) -> Unit,
+    ) {
+        executor.execute {
+            val outcome = runCatching {
+                if (!com.stellar.lang.plugin.onnx.OnnxInferenceEngine.isEnvironmentAvailable()) {
+                    error("ONNX Runtime native environment unavailable")
+                }
+                val hasDetection = com.stellar.lang.plugin.onnx.OnnxModelManager.isDetectionModelReady()
+                val hasTranslation = com.stellar.lang.plugin.onnx.OnnxModelManager.isTranslationModelReady(targetLang)
+                if (!hasDetection && !hasTranslation) {
+                    error("No ONNX models found in storage directory")
+                }
+                val results = mutableListOf<String>()
+                if (hasDetection) {
+                    val detected = com.stellar.lang.plugin.onnx.OnnxInferenceEngine.detectLanguage(
+                        "Bonjour tout le monde",
+                    )
+                    results.add("Det: 'Bonjour' -> ${detected ?: "unknown"}")
+                }
+                if (hasTranslation) {
+                    if (com.stellar.lang.plugin.onnx.OnnxInferenceEngine.isTranslationModelGenerative(targetLang)) {
+                        val translated = com.stellar.lang.plugin.onnx.OnnxInferenceEngine.translate(
+                            "Hello world",
+                            "en",
+                            targetLang,
+                        )
+                        results.add("Trans: 'Hello' -> ${translated ?: "null"}")
+                    } else {
+                        results.add("Trans: encoder-only ($targetLang)")
+                    }
+                }
+                results.joinToString("; ")
             }
             callback(outcome)
         }
