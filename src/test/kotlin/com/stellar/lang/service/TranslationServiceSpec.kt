@@ -1085,4 +1085,20 @@ class TranslationServiceSpec : FunSpec({
         config.detectionPlugin.setValue("libretranslate", false)
         com.stellar.lang.plugin.onnx.OnnxInferenceEngine.resetSessions()
     }
+
+    test("clearAllCaches clears cache, disk, and feature caches") {
+        val tempDir = java.nio.file.Files.createTempDirectory("stellar_clear_all_test")
+        val cacheFile = tempDir.resolve("test_cache.json")
+        TranslationCache.resetForTesting(cacheFile, 100)
+        TranslationCache.put(TranslationResult("Hello", "Bonjour", "en", "fr", false))
+        TranslationCache.flush()
+        java.nio.file.Files.exists(cacheFile) shouldBe true
+
+        TranslationService.clearAllCaches()
+
+        TranslationCache.size() shouldBe 0
+        java.nio.file.Files.exists(cacheFile) shouldBe false
+
+        java.nio.file.Files.deleteIfExists(tempDir)
+    }
 })

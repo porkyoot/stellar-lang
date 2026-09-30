@@ -24,7 +24,12 @@ class ChatComponentMixin {
         argsOnly = true,
         ordinal = 0,
     )
-    private fun stellarOnAddMessage(message: Component): Component {
-        return ChatTranslationManager.processIncomingMessage(message)
+    private fun stellarOnAddMessage(
+        message: Component,
+        signature: net.minecraft.network.chat.MessageSignature?,
+        source: net.minecraft.client.multiplayer.chat.GuiMessageSource?,
+        tag: net.minecraft.client.multiplayer.chat.GuiMessageTag?,
+    ): Component {
+        return ChatTranslationManager.processIncomingMessage(message, source)
     }
 }

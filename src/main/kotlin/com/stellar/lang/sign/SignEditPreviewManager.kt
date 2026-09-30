@@ -6,6 +6,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * Manages real-time translation state and debouncing for sign GUI live preview.
  */
+@Suppress("LongMethod")
 object SignEditPreviewManager {
     internal const val DEBOUNCE_MS = 250L
     internal const val FAILED_RETRY_COOLDOWN_MS = 5_000L
@@ -22,6 +23,7 @@ object SignEditPreviewManager {
 
     val isTranslating = AtomicBoolean(false)
     val hasFailed = AtomicBoolean(false)
+    val isSameLanguage = AtomicBoolean(false)
 
     fun clear() {
         lastRequestedText = ""
@@ -29,6 +31,7 @@ object SignEditPreviewManager {
         currentTranslatedText = ""
         isTranslating.set(false)
         hasFailed.set(false)
+        isSameLanguage.set(false)
     }
 
     @Suppress("CognitiveComplexMethod")
@@ -46,6 +49,7 @@ object SignEditPreviewManager {
             currentTranslatedText = cached.translatedText
             lastRequestedText = trimmed
             hasFailed.set(false)
+            isSameLanguage.set(cached.isSameLanguage)
             return currentTranslatedText
         }
 
@@ -68,8 +72,10 @@ object SignEditPreviewManager {
                 if (result != null) {
                     currentTranslatedText = result.translatedText
                     hasFailed.set(false)
+                    isSameLanguage.set(result.isSameLanguage)
                 } else {
                     hasFailed.set(true)
+                    isSameLanguage.set(false)
                 }
             }
         }

@@ -43,4 +43,18 @@ class TranslationBadgeHelperSpec : FunSpec({
         TranslationBadgeHelper.INDICATOR_FAILED_COLOR shouldBe 0xFF5555
         TranslationBadgeHelper.INDICATOR_TRANSLATING_COLOR shouldBe 0xAAAAAA
     }
+
+    test("createBadge and createTranslatingBadge return empty when hideIndicators is enabled") {
+        val config = com.stellar.lang.service.TranslationService.getConfig()
+        config.hideIndicators.setValue(true, false)
+        try {
+            TranslationBadgeHelper.isHidden() shouldBe true
+            TranslationBadgeHelper.createBadge(failed = false).string shouldBe ""
+            TranslationBadgeHelper.createBadge(failed = true, trailingSpace = false).string shouldBe ""
+            TranslationBadgeHelper.createTranslatingBadge(trailingSpace = true).string shouldBe ""
+            TranslationBadgeHelper.createTranslatingBadge(trailingSpace = false).string shouldBe ""
+        } finally {
+            config.hideIndicators.setValue(false, false)
+        }
+    }
 })

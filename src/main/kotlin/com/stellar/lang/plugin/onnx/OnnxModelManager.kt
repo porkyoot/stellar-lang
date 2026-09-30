@@ -70,6 +70,7 @@ object OnnxModelManager {
         httpClientOverride = null
         downloadExecutor.shutdownNow()
         downloadExecutor = createDownloadExecutor()
+        OnnxNativeManager.reset()
     }
 
     private fun createDownloadExecutor(): java.util.concurrent.ExecutorService =
@@ -153,6 +154,9 @@ object OnnxModelManager {
         val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main") ?: return
         if (!config.onnxAutoDownload.value()) return
 
+        if (!OnnxNativeManager.isNativeLibraryReady()) {
+            OnnxNativeManager.downloadNativeLibrariesAsync()
+        }
         if (!isDetectionModelReady()) {
             downloadDetectionModelAsync()
         }
@@ -334,6 +338,7 @@ object OnnxModelManager {
     }
 
     private fun onDownloadCompleted() {
+        OnnxNativeManager.ensureNativeLibrariesReady()
         OnnxInferenceEngine.resetSessions()
         runCatching {
             com.stellar.lang.service.TranslationCache.clear()

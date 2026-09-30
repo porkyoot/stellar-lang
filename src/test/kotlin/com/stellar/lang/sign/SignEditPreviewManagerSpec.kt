@@ -31,6 +31,16 @@ class SignEditPreviewManagerSpec : FunSpec({
         result shouldBe "Hello"
         SignEditPreviewManager.currentTranslatedText shouldBe "Hello"
         SignEditPreviewManager.lastRequestedText shouldBe "Bonjour"
+        SignEditPreviewManager.isSameLanguage.get() shouldBe false
+    }
+
+    test("updateRealtimeTranslation tracks isSameLanguage for same language cached results") {
+        val sameResult = TranslationResult("Hello", "Hello", "en", "en", true)
+        TranslationService.putCache(sameResult)
+
+        val result = SignEditPreviewManager.updateRealtimeTranslation("Hello")
+        result shouldBe "Hello"
+        SignEditPreviewManager.isSameLanguage.get() shouldBe true
     }
 
     test("updateRealtimeTranslation debounces uncached input before dispatching async") {
@@ -116,5 +126,6 @@ class SignEditPreviewManagerSpec : FunSpec({
         SignEditPreviewManager.currentTranslatedText shouldBe ""
         SignEditPreviewManager.isTranslating.get() shouldBe false
         SignEditPreviewManager.hasFailed.get() shouldBe false
+        SignEditPreviewManager.isSameLanguage.get() shouldBe false
     }
 })

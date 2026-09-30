@@ -43,6 +43,7 @@ class SignFormattingAndTooltipSpec : FunSpec({
         config.translateSigns.setValue(true, false)
         config.targetLanguage.setValue("en", false)
         config.apiHost.setValue("http://127.0.0.1:$serverPort", false)
+        config.hideIndicators.setValue(false, false)
     }
 
     test("isPureFormattingLine correctly identifies non-language lines") {
@@ -616,5 +617,90 @@ class SignFormattingAndTooltipSpec : FunSpec({
             dataUntranslatedFront.backOutcome
         }
         activeUntranslated shouldBe null
+    }
+
+    test("hasTranslatableText accurately detects empty, border, and translatable signs") {
+        val emptySignText = SignText()
+        SignTranslationManager.hasTranslatableText(emptySignText) shouldBe false
+        SignTranslationManager.extractSentence(emptySignText) shouldBe ""
+
+        var borderSignText = SignText()
+        borderSignText = borderSignText.setMessage(0, Component.literal("-------"))
+        borderSignText = borderSignText.setMessage(1, Component.literal("======="))
+        borderSignText = borderSignText.setMessage(2, Component.literal("* * *"))
+        borderSignText = borderSignText.setMessage(3, Component.literal("   "))
+        SignTranslationManager.hasTranslatableText(borderSignText) shouldBe false
+        SignTranslationManager.extractSentence(borderSignText) shouldBe ""
+
+        var textSignText = SignText()
+        textSignText = textSignText.setMessage(0, Component.literal("--- Welcome ---"))
+        SignTranslationManager.hasTranslatableText(textSignText) shouldBe true
+        SignTranslationManager.extractSentence(textSignText) shouldBe "Welcome"
+
+        var letterSignText = SignText()
+        letterSignText = letterSignText.setMessage(1, Component.literal("Shop"))
+        SignTranslationManager.hasTranslatableText(letterSignText) shouldBe true
+
+        SignFormatHelper.isBorderChar('|') shouldBe true
+        SignFormatHelper.isBorderChar('A') shouldBe false
+    }
+
+    test("hasTranslatableText with SignBlockEntity") {
+        val unsafeField = sun.misc.Unsafe::class.java.getDeclaredField("theUnsafe")
+        unsafeField.isAccessible = true
+        val unsafe = unsafeField.get(null) as sun.misc.Unsafe
+
+        val sign = unsafe.allocateInstance(net.minecraft.world.level.block.entity.SignBlockEntity::class.java)
+            as net.minecraft.world.level.block.entity.SignBlockEntity
+
+        val frontTextField = net.minecraft.world.level.block.entity.SignBlockEntity::class.java
+            .getDeclaredField("frontText")
+        frontTextField.isAccessible = true
+        val backTextField = net.minecraft.world.level.block.entity.SignBlockEntity::class.java
+            .getDeclaredField("backText")
+        backTextField.isAccessible = true
+
+        frontTextField.set(sign, SignText())
+        backTextField.set(sign, SignText())
+        SignTranslationManager.hasTranslatableText(sign) shouldBe false
+
+        var frontWithText = SignText()
+        frontWithText = frontWithText.setMessage(0, Component.literal("Hello"))
+        frontTextField.set(sign, frontWithText)
+        SignTranslationManager.hasTranslatableText(sign) shouldBe true
+
+        frontTextField.set(sign, SignText())
+        var backWithText = SignText()
+        backWithText = backWithText.setMessage(0, Component.literal("Back text"))
+        backTextField.set(sign, backWithText)
+        SignTranslationManager.hasTranslatableText(sign) shouldBe true
+    }
+
+    test("SignTooltipRenderer resetRaycastCache clears state") {
+        SignTooltipRenderer.resetRaycastCache()
+    }
+
+    test("SignTooltipRenderer isPlayerLookingAtSign uses TargetManager") {
+        val unsafeField = sun.misc.Unsafe::class.java.getDeclaredField("theUnsafe")
+        unsafeField.isAccessible = true
+        val unsafe = unsafeField.get(null) as sun.misc.Unsafe
+
+        val state = unsafe.allocateInstance(
+            net.minecraft.client.renderer.blockentity.state.SignRenderState::class.java,
+        ) as net.minecraft.client.renderer.blockentity.state.SignRenderState
+        val pos = BlockPos(10, 20, 30)
+        state.blockPos = pos
+
+        val mockMc = unsafe.allocateInstance(net.minecraft.client.Minecraft::class.java)
+            as net.minecraft.client.Minecraft
+
+        com.stellar.lang.target.TargetManager.clearTarget()
+        SignTooltipRenderer.isPlayerLookingAtSign(state, mockMc) shouldBe false
+
+        com.stellar.lang.target.TargetManager.targetedBlockPos = pos
+        SignTooltipRenderer.isPlayerLookingAtSign(state, mockMc) shouldBe true
+
+        SignTooltipRenderer.resetRaycastCache()
+        SignTooltipRenderer.isPlayerLookingAtSign(state, mockMc) shouldBe false
     }
 })

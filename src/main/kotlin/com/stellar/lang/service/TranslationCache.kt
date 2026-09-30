@@ -200,6 +200,17 @@ object TranslationCache {
         resetCircuitBreaker()
     }
 
+    fun clearDiskCache(targetPath: Path? = null) {
+        val path = targetPath ?: resolveStoragePath()
+        runCatching {
+            if (Files.exists(path)) {
+                Files.deleteIfExists(path)
+            }
+        }.onFailure { ex ->
+            logger.warn("Failed to delete translation cache file at {}: {}", path, ex.message)
+        }
+    }
+
     fun resolveStoragePath(): Path {
         customStoragePath?.let { return it }
         val quiltGameDir = runCatching {

@@ -217,4 +217,20 @@ class TranslationCacheSpec : FunSpec({
         TranslationCache.clear()
         TranslationCache.flush()
     }
+
+    test("clearDiskCache deletes cache file if it exists") {
+        val tempDir = Files.createTempDirectory("disk_clear_test")
+        val cacheFile = tempDir.resolve("cache.json")
+        Files.writeString(cacheFile, "[]")
+        Files.exists(cacheFile) shouldBe true
+
+        TranslationCache.clearDiskCache(cacheFile)
+        Files.exists(cacheFile) shouldBe false
+
+        // calling again when file does not exist should be safe
+        TranslationCache.clearDiskCache(cacheFile)
+        Files.exists(cacheFile) shouldBe false
+
+        Files.deleteIfExists(tempDir)
+    }
 })

@@ -42,6 +42,12 @@ class StellarLangConfig : ReflectiveConfig() {
     @Comment("Enable translation of signs")
     val translateSigns: TrackedValue<Boolean> = value(true)
 
+    @Comment("Enable floating tooltips and indicators for translated signs")
+    val signTooltips: TrackedValue<Boolean> = value(true)
+
+    @Comment("Interval in milliseconds between raycast line-of-sight checks for sign tooltips (0 = every frame)")
+    val signRaycastIntervalMs: TrackedValue<Int> = value(DEFAULT_SIGN_RAYCAST_INTERVAL_MS)
+
     @Comment("Enable translation of books with area and page context")
     val translateBooks: TrackedValue<Boolean> = value(true)
 
@@ -53,6 +59,12 @@ class StellarLangConfig : ReflectiveConfig() {
 
     @Comment("Enable translation of renamed container and inventory labels")
     val translateContainers: TrackedValue<Boolean> = value(true)
+
+    @Comment("Enable translation of banners and markers on maps")
+    val translateMapBanners: TrackedValue<Boolean> = value(true)
+
+    @Comment("Hide the [T] and [...] translation and in-flight status indicators")
+    val hideIndicators: TrackedValue<Boolean> = value(false)
 
     @Comment("GLFW key code to show original text on signs and entities (default: COMMA = 44)")
     val showOriginalKey: TrackedValue<Int> = value(Key.KEY_COMMA)
@@ -71,5 +83,8 @@ class StellarLangConfig : ReflectiveConfig() {
         const val DEFAULT_ONNX_THREADS: Int = 2
         const val MIN_ONNX_THREADS: Int = 1
         const val MAX_ONNX_THREADS: Int = 8
+        const val DEFAULT_SIGN_RAYCAST_INTERVAL_MS: Int = 100
+        const val MIN_SIGN_RAYCAST_INTERVAL_MS: Int = 0
+        const val MAX_SIGN_RAYCAST_INTERVAL_MS: Int = 1000
     }
 }

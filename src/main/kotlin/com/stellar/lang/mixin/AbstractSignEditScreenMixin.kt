@@ -22,7 +22,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo
 /**
  * Mixin into AbstractSignEditScreen to add a second bigger sign previewing real-time translation.
  */
-@Suppress("UnusedPrivateMember", "LongParameterList", "MagicNumber")
+@Suppress("UnusedPrivateMember", "LongParameterList", "MagicNumber", "LongMethod")
 @Mixin(AbstractSignEditScreen::class)
 abstract class AbstractSignEditScreenMixin : Screen(Component.empty()) {
     @Shadow
@@ -83,6 +83,7 @@ abstract class AbstractSignEditScreenMixin : Screen(Component.empty()) {
         )
 
         val langCode = TranslationService.getTargetLanguage().uppercase()
+        val isSameLang = SignEditPreviewManager.isSameLanguage.get()
         val badge = if (SignEditPreviewManager.isTranslating.get()) {
             com.stellar.lang.badge.TranslationBadgeHelper.createTranslatingBadge(trailingSpace = true)
         } else {
@@ -91,8 +92,14 @@ abstract class AbstractSignEditScreenMixin : Screen(Component.empty()) {
                 trailingSpace = true,
             )
         }
-        val header = Component.empty().append(badge)
-            .append(Component.literal("Translated ($langCode)").withStyle(ChatFormatting.WHITE))
+        val header = if (isSameLang) {
+            Component.empty()
+                .append(Component.literal("[=] ").withStyle(ChatFormatting.DARK_GRAY))
+                .append(Component.literal("Same Language ($langCode)").withStyle(ChatFormatting.GRAY))
+        } else {
+            Component.empty().append(badge)
+                .append(Component.literal("Translated ($langCode)").withStyle(ChatFormatting.WHITE))
+        }
         extractor.centeredText(
             this.font,
             header,
@@ -133,13 +140,23 @@ abstract class AbstractSignEditScreenMixin : Screen(Component.empty()) {
             AbstractSignRenderer.getDarkColor(this.text)
         }
         val textColor = if (darkColor == 0) 0x000000 else darkColor
+        val isSameLang = SignEditPreviewManager.isSameLanguage.get()
         val displayText = when {
+            isSameLang -> ""
             translated.isNotEmpty() -> translated
             SignEditPreviewManager.hasFailed.get() -> fullOriginal
             else -> ""
         }
 
-        if (displayText.isNotEmpty()) {
+        if (isSameLang) {
+            val langCode = TranslationService.getTargetLanguage().uppercase()
+            val sameLangMsg = "[Same Language]"
+            val subMsg = "Already in $langCode"
+            val msgWidth = this.font.width(sameLangMsg)
+            val subWidth = this.font.width(subMsg)
+            extractor.text(this.font, sameLangMsg, -msgWidth / 2, -this.font.lineHeight, 0x888888, false)
+            extractor.text(this.font, subMsg, -subWidth / 2, 2, 0xAAAAAA, false)
+        } else if (displayText.isNotEmpty()) {
             renderPreviewLines(extractor, displayText, textColor)
         } else if (fullOriginal.isNotEmpty() && SignEditPreviewManager.isTranslating.get()) {
             val translatingMsg = "..."

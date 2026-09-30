@@ -27,9 +27,11 @@ import net.minecraft.world.entity.EntityEquipment
 import net.minecraft.world.entity.EquipmentSlot
 import net.minecraft.world.entity.LivingEntity
 import net.minecraft.world.entity.decoration.ArmorStand
+import net.minecraft.world.entity.decoration.ItemFrame
 import net.minecraft.world.inventory.AbstractContainerMenu
 import net.minecraft.world.item.Item
 import net.minecraft.world.item.ItemStack
+import net.minecraft.world.item.MapItem
 import net.minecraft.world.item.WritableBookItem
 import net.minecraft.world.item.WrittenBookItem
 import net.minecraft.world.level.block.entity.BaseContainerBlockEntity
@@ -60,13 +62,21 @@ class StellarLangInputHandlerSpec : FunSpec({
         config.enabled.setValue(true, false)
         config.retryTargetKey.setValue(Key.KEY_PERIOD, false)
         config.showOriginalKey.setValue(Key.KEY_COMMA, false)
+        config.translationPlugin.setValue("libretranslate", false)
+        config.detectionPlugin.setValue("libretranslate", false)
+        config.apiHost.setValue("http://127.0.0.1:9", false)
     }
 
     afterEach {
         StellarLangInputHandler.clearProviders()
     }
 
-    fun createMockItem(customName: Component?, isBook: Boolean = false, isWritten: Boolean = false): ItemStack {
+    fun createMockItem(
+        customName: Component?,
+        isBook: Boolean = false,
+        isWritten: Boolean = false,
+        isMap: Boolean = false,
+    ): ItemStack {
         val stack = unsafe.allocateInstance(ItemStack::class.java) as ItemStack
         val compField = ItemStack::class.java.getDeclaredField("components")
         compField.isAccessible = true
@@ -78,6 +88,7 @@ class StellarLangInputHandlerSpec : FunSpec({
         val dummyItem = when {
             isWritten -> unsafe.allocateInstance(WrittenBookItem::class.java) as WrittenBookItem
             isBook -> unsafe.allocateInstance(WritableBookItem::class.java) as WritableBookItem
+            isMap -> unsafe.allocateInstance(MapItem::class.java) as MapItem
             else -> unsafe.allocateInstance(Item::class.java) as Item
         }
         itemField.set(stack, Holder.direct(dummyItem))
@@ -95,6 +106,38 @@ class StellarLangInputHandlerSpec : FunSpec({
         }
         compField.set(stack, map)
         return stack
+    }
+
+    fun createMockItemFrame(item: ItemStack): ItemFrame {
+        val frame = unsafe.allocateInstance(ItemFrame::class.java) as ItemFrame
+        val itemAccessorField = ItemFrame::class.java.getDeclaredField("DATA_ITEM")
+        itemAccessorField.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val itemAccessor = itemAccessorField.get(null) as EntityDataAccessor<ItemStack>
+
+        val nameAccessorField = Entity::class.java.getDeclaredField("DATA_CUSTOM_NAME")
+        nameAccessorField.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        val nameAccessor = nameAccessorField.get(null) as EntityDataAccessor<Optional<Component>>
+
+        val maxId = maxOf(itemAccessor.id, nameAccessor.id)
+        val synchedData = unsafe.allocateInstance(SynchedEntityData::class.java) as SynchedEntityData
+        val items = arrayOfNulls<SynchedEntityData.DataItem<*>>(maxId + 1)
+        items[itemAccessor.id] = SynchedEntityData.DataItem(itemAccessor, item)
+        items[nameAccessor.id] = SynchedEntityData.DataItem(nameAccessor, Optional.empty())
+
+        val itemsField = SynchedEntityData::class.java.getDeclaredField("itemsById")
+        itemsField.isAccessible = true
+        itemsField.set(synchedData, items)
+
+        val entityDataField = Entity::class.java.getDeclaredField("entityData")
+        entityDataField.isAccessible = true
+        entityDataField.set(frame, synchedData)
+
+        val typeField = Entity::class.java.getDeclaredField("type")
+        typeField.isAccessible = true
+        typeField.set(frame, net.minecraft.world.entity.EntityTypes.ITEM_FRAME)
+        return frame
     }
 
     fun createMockEntity(name: Component?): Entity {
@@ -418,6 +461,23 @@ class StellarLangInputHandlerSpec : FunSpec({
         (target is StellarLangInputHandler.RefreshTarget.Sign) shouldBe true
     }
 
+    test("resolveEntityTarget resolves from TargetManager") {
+        val stand = createMockEntity(Component.literal("Bonjour"))
+        com.stellar.lang.target.TargetManager.targetedEntity = stand
+        val target = StellarLangInputHandler.resolveTarget()
+        (target is StellarLangInputHandler.RefreshTarget.EntityTarget) shouldBe true
+        (target as StellarLangInputHandler.RefreshTarget.EntityTarget).entity shouldBe stand
+    }
+
+    test("resolveBlockTarget resolves from TargetManager.targetedBlockHit") {
+        val hit = BlockHitResult(Vec3.ZERO, Direction.UP, BlockPos.ZERO, false)
+        val sign = createMockSign("Auberge")
+        com.stellar.lang.target.TargetManager.targetedBlockHit = hit
+        StellarLangInputHandler.blockEntityProvider = { sign }
+        val target = StellarLangInputHandler.resolveTarget()
+        (target is StellarLangInputHandler.RefreshTarget.Sign) shouldBe true
+    }
+
     test("resolveHeldItemTarget handles empty itemStack from provider") {
         StellarLangInputHandler.heldItemProvider = { ItemStack.EMPTY }
         StellarLangInputHandler.resolveTarget() shouldBe null
@@ -593,9 +653,29 @@ class StellarLangInputHandlerSpec : FunSpec({
         }
         StellarLangInputHandler.retryTargetTranslation() shouldBe false
 
+        // ItemFrame holding MapItem
+        val mapStack = createMockItem(Component.literal("Carte de navigation"), isMap = true)
+        val frameWithMap = createMockItemFrame(mapStack)
+        StellarLangInputHandler.targetProvider = {
+            StellarLangInputHandler.RefreshTarget.EntityTarget(frameWithMap)
+        }
+        StellarLangInputHandler.retryTargetTranslation() shouldBe true
+
+        // ItemFrame holding regular Item
+        val swordStack = createMockItem(Component.literal("Epée"), isMap = false)
+        val frameWithSword = createMockItemFrame(swordStack)
+        StellarLangInputHandler.targetProvider = {
+            StellarLangInputHandler.RefreshTarget.EntityTarget(frameWithSword)
+        }
+        StellarLangInputHandler.retryTargetTranslation() shouldBe true
+
         // 4. Held item
         val normalItem = createMockItem(Component.literal("Hache"))
         StellarLangInputHandler.targetProvider = { StellarLangInputHandler.RefreshTarget.HeldItem(normalItem) }
+        StellarLangInputHandler.retryTargetTranslation() shouldBe true
+
+        val mapHeldItem = createMockItem(Component.literal("Carte ancienne"), isMap = true)
+        StellarLangInputHandler.targetProvider = { StellarLangInputHandler.RefreshTarget.HeldItem(mapHeldItem) }
         StellarLangInputHandler.retryTargetTranslation() shouldBe true
 
         val bookItem = createMockItem(Component.literal("Grimoire"), isBook = true)

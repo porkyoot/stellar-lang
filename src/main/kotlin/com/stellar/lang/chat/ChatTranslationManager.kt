@@ -1,19 +1,35 @@
-@file:Suppress("TooManyFunctions")
+@file:Suppress(
+    "TooManyFunctions",
+    "LargeClass",
+    "LongParameterList",
+    "CognitiveComplexMethod",
+    "CyclomaticComplexMethod",
+    "NestedBlockDepth",
+    "LabeledExpression",
+)
 
 package com.stellar.lang.chat
 
+import com.stellar.lang.badge.TranslationBadgeHelper
 import com.stellar.lang.mixin.ChatComponentAccessor
 import com.stellar.lang.service.TranslationResult
 import com.stellar.lang.service.TranslationService
 import net.minecraft.ChatFormatting
 import net.minecraft.client.Minecraft
 import net.minecraft.client.multiplayer.chat.GuiMessage
+import net.minecraft.client.multiplayer.chat.GuiMessageSource
 import net.minecraft.network.chat.ClickEvent
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.HoverEvent
 import net.minecraft.network.chat.MutableComponent
+import net.minecraft.network.chat.Style
 import net.minecraft.network.chat.contents.PlainTextContents
+import net.minecraft.network.chat.contents.TranslatableContents
+import java.util.Optional
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicLong
 import java.util.regex.Pattern
 
@@ -24,15 +40,64 @@ import java.util.regex.Pattern
 @Suppress("LargeClass")
 object ChatTranslationManager {
     const val COMMAND_PREFIX: String = "/stellar_lang_chat_toggle"
+    const val TRANSLATION_TIMEOUT_SECONDS: Long = 5L
     private const val MIN_TRANSLATABLE_LENGTH = 2
     private const val TOGGLE_HOVER_TEXT = "Click to toggle original/translated text"
     private val idGenerator = AtomicLong(1000L)
     private val trackedMessages = ConcurrentHashMap<Long, TrackedChatMessage>()
 
+    private val defaultTimeoutExecutor: ScheduledExecutorService =
+        Executors.newSingleThreadScheduledExecutor { runnable ->
+            Thread(runnable, "StellarLang-ChatTimeout").apply { isDaemon = true }
+        }
+
+    @Volatile
+    var timeoutExecutor: ScheduledExecutorService = defaultTimeoutExecutor
+
     // Matches standard player chat prefixes, with or without Chat Heads player sprites:
     // e.g. "<[Porkyoot head]Porkyoot> ", "<Dev1lroot> ", "[VIP] <Dev1lroot> ", "Dev1lroot: ", "Dev1lroot » "
     private val CHAT_PREFIX_REGEX = Pattern.compile(
         """^(\s*(?:\[[^\]]*\]\s*)*<[^>]+>\s*|^\s*\[[^\]]+\]\s+<\w+>\s*|^\s*[\w\u00A7]{2,20}\s*[:»>]\s*)""",
+    )
+
+    private val DEATH_PATTERN = Pattern.compile(
+        """\b(?:was slain by|was shot by|was blown up by|was killed by|was squashed by|was pricked to death|""" +
+            """was impaled by|was roasted in dragon's breath|was doomed to fall|fell from a high place|""" +
+            """fell off a ladder|fell off scaffolding|fell while climbing|hit the ground too hard|drowned|""" +
+            """experienced kinetic energy|burned to death|went up in flames|tried to swim in lava|""" +
+            """discovered the floor was lava|starved to death|suffocated in a wall|withered away|died)\b""",
+        Pattern.CASE_INSENSITIVE,
+    )
+
+    private val ADVANCEMENT_PATTERN = Pattern.compile(
+        """\bhas (?:made the advancement|completed the challenge|reached the goal)\b""",
+        Pattern.CASE_INSENSITIVE,
+    )
+
+    private val JOIN_LEAVE_PATTERN = Pattern.compile(
+        """\b(?:joined the game|left the game)\b""",
+        Pattern.CASE_INSENSITIVE,
+    )
+
+    private val ADVANCEMENT_KEY_PREFIXES = listOf(
+        "chat.type.advancement.",
+        "advancement.",
+        "advancements.",
+    )
+
+    private val JOIN_LEAVE_KEY_PREFIXES = listOf(
+        "multiplayer.player.joined",
+        "multiplayer.player.left",
+    )
+
+    private val MOTD_PHRASES = listOf(
+        "motd",
+        "message of the day",
+        "server news",
+        "welcome to",
+        "bienvenue sur",
+        "bienvenue à",
+        "willkommen auf",
     )
 
     @Volatile
@@ -54,6 +119,7 @@ object ChatTranslationManager {
         if (result.isSameLanguage) return
         for (tracked in trackedMessages.values) {
             if (tracked.messageText == result.originalText) {
+                tracked.isPending = false
                 val translated = createTranslatedComponent(tracked.id, result, tracked.prefixComponent)
                 tracked.translatedComponent = translated
                 scheduleChatRefresh(tracked)
@@ -74,6 +140,8 @@ object ChatTranslationManager {
         val messageText: String = plainText,
         var translatedComponent: Component? = null,
         var isShowingOriginal: Boolean = false,
+        @Volatile var isPending: Boolean = false,
+        @Volatile var currentAttempt: Long = 0L,
     ) {
         fun toggleOriginal(): Boolean {
             isShowingOriginal = !isShowingOriginal
@@ -110,14 +178,22 @@ object ChatTranslationManager {
         for (comp in flatList) {
             if (currentLen >= prefixLength) break
 
-            val compLen = comp.string.length
-            if (currentLen + compLen <= prefixLength) {
-                prefixComponents.add(comp)
-                currentLen += compLen
-            } else {
-                val needed = prefixLength - currentLen
-                prefixComponents.add(sliceComponent(comp, needed))
-                currentLen += needed
+            val str = comp.string
+            val compLen = str.length
+            if (compLen > 0) {
+                if (currentLen + compLen <= prefixLength) {
+                    val flatComp = if (comp.siblings.isEmpty() && comp.contents is PlainTextContents) {
+                        comp
+                    } else {
+                        Component.literal(str).setStyle(comp.style)
+                    }
+                    prefixComponents.add(flatComp)
+                    currentLen += compLen
+                } else {
+                    val needed = prefixLength - currentLen
+                    prefixComponents.add(sliceComponent(comp, needed))
+                    currentLen += needed
+                }
             }
         }
 
@@ -128,17 +204,15 @@ object ChatTranslationManager {
     }
 
     private fun sliceComponent(comp: Component, needed: Int): Component {
-        val contents = comp.contents
-        if (contents is PlainTextContents) {
-            val text = contents.text()
-            if (needed <= text.length) {
-                return Component.literal(text.substring(0, needed)).setStyle(comp.style)
-            }
-        }
-        return comp
+        val str = comp.string
+        val slicedText = if (needed <= str.length) str.substring(0, needed) else str
+        return Component.literal(slicedText).setStyle(comp.style)
     }
 
-    fun processIncomingMessage(component: Component): Component {
+    fun processIncomingMessage(
+        component: Component,
+        source: GuiMessageSource? = null,
+    ): Component {
         val config = TranslationService.getConfig()
         if (!config.enabled.value() || !config.translateChat.value()) {
             return component
@@ -146,7 +220,7 @@ object ChatTranslationManager {
 
         val plainText = component.string.trim()
         val payload = extractChatPayload(component)
-        if (shouldSkipMessage(plainText) || shouldSkipMessage(payload.messageText)) {
+        if (shouldSkipMessage(component, payload, plainText, source)) {
             return component
         }
 
@@ -184,9 +258,9 @@ object ChatTranslationManager {
         }
 
         if (cached == null) {
-            triggerBackgroundChatTranslation(tracked, payload.messageText)
             val translating = createTranslatingComponent(id, payload.messageText, payload.prefixComponent)
             tracked.translatedComponent = translating
+            triggerBackgroundChatTranslation(tracked, payload.messageText)
             return translating
         }
 
@@ -199,22 +273,171 @@ object ChatTranslationManager {
         messageText: String,
         forceRetry: Boolean = false,
     ) {
+        val attempt = ++tracked.currentAttempt
+        tracked.isPending = true
+
+        timeoutExecutor.schedule({
+            handleTimeout(tracked, attempt)
+        }, TRANSLATION_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+
         TranslationService.translateAsync(messageText, forceRetry = forceRetry) { result ->
-            if (result != null && !result.isSameLanguage) {
-                val translated = createTranslatedComponent(tracked.id, result, tracked.prefixComponent)
-                tracked.translatedComponent = translated
+            if (tracked.currentAttempt != attempt || !tracked.isPending) return@translateAsync
+            tracked.isPending = false
+
+            if (result != null) {
+                if (result.isSameLanguage) {
+                    tracked.translatedComponent = null
+                } else {
+                    val translated = createTranslatedComponent(tracked.id, result, tracked.prefixComponent)
+                    tracked.translatedComponent = translated
+                }
                 scheduleChatRefresh(tracked)
-            } else if (result == null && TranslationService.isFailed(messageText)) {
-                val failedComp = createFailedComponent(tracked.id, messageText, tracked.prefixComponent)
-                tracked.translatedComponent = failedComp
-                scheduleChatRefresh(tracked)
+            } else {
+                markFailedAndRefresh(tracked)
             }
         }
     }
 
-    private fun shouldSkipMessage(text: String): Boolean {
+    internal fun handleTimeout(tracked: TrackedChatMessage, attempt: Long) {
+        if (tracked.currentAttempt == attempt && tracked.isPending) {
+            tracked.isPending = false
+            markFailedAndRefresh(tracked)
+        }
+    }
+
+    private fun markFailedAndRefresh(tracked: TrackedChatMessage) {
+        TranslationService.markFailed(tracked.messageText)
+        val failedComp = createFailedComponent(tracked.id, tracked.messageText, tracked.prefixComponent)
+        tracked.translatedComponent = failedComp
+        scheduleChatRefresh(tracked)
+    }
+
+    private fun isGameEventMessage(component: Component, messageText: String): Boolean {
+        return isDeathMessage(component, messageText) ||
+            isAdvancementMessage(component, messageText) ||
+            isJoinLeaveMessage(component, messageText) ||
+            isAdminOrCommandMessage(component)
+    }
+
+    @Suppress("ReturnCount")
+    fun shouldSkipMessage(
+        component: Component,
+        payload: ParsedChatPayload,
+        plainText: String,
+        source: GuiMessageSource? = null,
+    ): Boolean {
+        if (shouldSkipMessage(plainText) || shouldSkipMessage(payload.messageText)) {
+            return true
+        }
+
+        if (source == GuiMessageSource.SYSTEM_CLIENT) {
+            return true
+        }
+
+        val isSystemServer = source == GuiMessageSource.SYSTEM_SERVER || payload.prefixComponent == null
+        if (isSystemServer) {
+            if (isMotdMessage(component, payload.messageText)) {
+                return false
+            }
+            if (isGameEventMessage(component, payload.messageText)) {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    internal fun shouldSkipMessage(text: String): Boolean {
         val isBadgePrefix = text.startsWith("[T]") || text.startsWith("[...]")
         return text.length < MIN_TRANSLATABLE_LENGTH || text.startsWith("/") || isBadgePrefix
+    }
+
+    fun hasTranslatableKey(component: Component, predicate: (String) -> Boolean): Boolean {
+        val contents = component.contents
+        val inKey = contents is TranslatableContents && predicate(contents.key)
+        val inArgs = contents is TranslatableContents && contents.args.any {
+            it is Component && hasTranslatableKey(it, predicate)
+        }
+        return inKey || inArgs || component.siblings.any { hasTranslatableKey(it, predicate) }
+    }
+
+    fun isDeathMessage(component: Component, messageText: String): Boolean {
+        if (hasTranslatableKey(component) { it.startsWith("death.") }) {
+            return true
+        }
+        return DEATH_PATTERN.matcher(messageText).find()
+    }
+
+    fun isAdvancementMessage(component: Component, messageText: String): Boolean {
+        if (hasTranslatableKey(component) { key -> ADVANCEMENT_KEY_PREFIXES.any { key.startsWith(it) } }) {
+            return true
+        }
+        return ADVANCEMENT_PATTERN.matcher(messageText).find()
+    }
+
+    fun isJoinLeaveMessage(component: Component, messageText: String): Boolean {
+        if (hasTranslatableKey(component) { key -> JOIN_LEAVE_KEY_PREFIXES.any { key.startsWith(it) } }) {
+            return true
+        }
+        return JOIN_LEAVE_PATTERN.matcher(messageText).find()
+    }
+
+    fun isAdminOrCommandMessage(component: Component): Boolean {
+        return hasTranslatableKey(component) {
+            it.startsWith("commands.") ||
+                it.startsWith("chat.type.admin") ||
+                it.startsWith("gameMode.")
+        }
+    }
+
+    fun isMotdMessage(component: Component, messageText: String): Boolean {
+        val fullLower = component.string.lowercase()
+        val textLower = messageText.lowercase()
+        val hasPhrase = MOTD_PHRASES.any { fullLower.contains(it) || textLower.contains(it) }
+        val hasKey = hasTranslatableKey(component) { it.contains("motd") || it.contains("welcome") }
+        return hasPhrase || hasKey
+    }
+
+    private data class ChatBadgeStyle(
+        val badgeText: String,
+        val color: ChatFormatting,
+        val isBold: Boolean = false,
+        val isStrikethrough: Boolean = false,
+    )
+
+    private fun buildChatComponent(
+        id: Long,
+        content: String,
+        prefixComponent: Component?,
+        hoverText: String,
+        badgeStyle: ChatBadgeStyle,
+    ): MutableComponent {
+        val root = Component.empty()
+        val isHidden = TranslationBadgeHelper.isHidden()
+        if (!isHidden) {
+            val badge = Component.literal(badgeStyle.badgeText).withStyle { style ->
+                var s = style.withColor(badgeStyle.color)
+                    .withHoverEvent(HoverEvent.ShowText(Component.literal(hoverText)))
+                    .withClickEvent(ClickEvent.RunCommand(buildToggleCommand(id)))
+                if (badgeStyle.isBold) s = s.withBold(true)
+                if (badgeStyle.isStrikethrough) s = s.withStrikethrough(true)
+                s
+            }
+            root.append(badge)
+        }
+        if (prefixComponent != null) {
+            root.append(prefixComponent)
+        }
+        val textComp = if (isHidden) {
+            Component.literal(content).withStyle { style ->
+                style.withHoverEvent(HoverEvent.ShowText(Component.literal(hoverText)))
+                    .withClickEvent(ClickEvent.RunCommand(buildToggleCommand(id)))
+            }
+        } else {
+            Component.literal(content)
+        }
+        root.append(textComp)
+        return root
     }
 
     fun createTranslatedComponent(
@@ -222,26 +445,15 @@ object ChatTranslationManager {
         result: TranslationResult,
         prefixComponent: Component? = null,
     ): MutableComponent {
-        val badge = Component.literal("[T] ").withStyle { style ->
-            style.withColor(ChatFormatting.AQUA)
-                .withBold(true)
-                .withHoverEvent(
-                    HoverEvent.ShowText(
-                        Component.literal(
-                            "Translated: [${result.detectedLanguage} -> ${result.targetLanguage}]\n" +
-                                "Original: ${result.originalText}\n$TOGGLE_HOVER_TEXT",
-                        ),
-                    ),
-                )
-                .withClickEvent(ClickEvent.RunCommand(buildToggleCommand(id)))
-        }
-
-        val root = Component.empty().append(badge)
-        if (prefixComponent != null) {
-            root.append(prefixComponent)
-        }
-        root.append(Component.literal(result.translatedText))
-        return root
+        val hoverText = "Translated: [${result.detectedLanguage} -> ${result.targetLanguage}]\n" +
+            "Original: ${result.originalText}\n$TOGGLE_HOVER_TEXT"
+        return buildChatComponent(
+            id = id,
+            content = result.translatedText,
+            prefixComponent = prefixComponent,
+            hoverText = hoverText,
+            badgeStyle = ChatBadgeStyle("[T] ", ChatFormatting.AQUA, isBold = true),
+        )
     }
 
     fun createFailedComponent(
@@ -249,27 +461,19 @@ object ChatTranslationManager {
         originalText: String,
         prefixComponent: Component? = null,
     ): MutableComponent {
-        val badge = Component.literal("[T] ").withStyle { style ->
-            style.withColor(ChatFormatting.RED)
-                .withBold(true)
-                .withStrikethrough(true)
-                .withHoverEvent(
-                    HoverEvent.ShowText(
-                        Component.literal(
-                            "Translation failed\n" +
-                                "Original: $originalText\n$TOGGLE_HOVER_TEXT",
-                        ),
-                    ),
-                )
-                .withClickEvent(ClickEvent.RunCommand(buildToggleCommand(id)))
-        }
-
-        val root = Component.empty().append(badge)
-        if (prefixComponent != null) {
-            root.append(prefixComponent)
-        }
-        root.append(Component.literal(originalText))
-        return root
+        val hoverText = "Translation failed\nOriginal: $originalText\n$TOGGLE_HOVER_TEXT"
+        return buildChatComponent(
+            id = id,
+            content = originalText,
+            prefixComponent = prefixComponent,
+            hoverText = hoverText,
+            badgeStyle = ChatBadgeStyle(
+                badgeText = "[T] ",
+                color = ChatFormatting.RED,
+                isBold = true,
+                isStrikethrough = true,
+            ),
+        )
     }
 
     fun createTranslatingComponent(
@@ -277,25 +481,14 @@ object ChatTranslationManager {
         originalText: String,
         prefixComponent: Component? = null,
     ): MutableComponent {
-        val badge = Component.literal("[...] ").withStyle { style ->
-            style.withColor(ChatFormatting.GRAY)
-                .withHoverEvent(
-                    HoverEvent.ShowText(
-                        Component.literal(
-                            "Translating...\n" +
-                                "Original: $originalText\n$TOGGLE_HOVER_TEXT",
-                        ),
-                    ),
-                )
-                .withClickEvent(ClickEvent.RunCommand(buildToggleCommand(id)))
-        }
-
-        val root = Component.empty().append(badge)
-        if (prefixComponent != null) {
-            root.append(prefixComponent)
-        }
-        root.append(Component.literal(originalText))
-        return root
+        val hoverText = "Translating...\nOriginal: $originalText\n$TOGGLE_HOVER_TEXT"
+        return buildChatComponent(
+            id = id,
+            content = originalText,
+            prefixComponent = prefixComponent,
+            hoverText = hoverText,
+            badgeStyle = ChatBadgeStyle("[...] ", ChatFormatting.GRAY),
+        )
     }
 
     private fun buildToggleCommand(id: Long): String = "$COMMAND_PREFIX $id"
@@ -345,16 +538,34 @@ object ChatTranslationManager {
         }
     }
 
-    private fun isMatchingMessage(msg: GuiMessage, tracked: TrackedChatMessage): Boolean {
+    internal fun isMatchingMessage(msg: GuiMessage, tracked: TrackedChatMessage): Boolean {
         val content = msg.content()
+        if (matchesComponentExact(content, tracked)) return true
+
+        val targetCmd = "$COMMAND_PREFIX ${tracked.id}"
+        var matchesCommand = false
+        content.visit({ style, _ ->
+            val event = style.clickEvent
+            if (event is ClickEvent.RunCommand && event.command() == targetCmd) {
+                matchesCommand = true
+                Optional.of(true)
+            } else {
+                Optional.empty()
+            }
+        }, Style.EMPTY)
+
         val text = content.string
-        val matchesComponent = content === tracked.originalComponent ||
-            content == tracked.originalComponent ||
-            content === tracked.translatedComponent ||
-            content == tracked.translatedComponent
         val matchesText = text == tracked.plainText ||
             tracked.translatedComponent != null && text == tracked.translatedComponent?.string
-        return matchesComponent || matchesText
+
+        return matchesCommand || matchesText
+    }
+
+    private fun matchesComponentExact(content: Component, tracked: TrackedChatMessage): Boolean {
+        val translated = tracked.translatedComponent
+        return content === tracked.originalComponent ||
+            content == tracked.originalComponent ||
+            translated != null && (content === translated || content == translated)
     }
 
     internal fun copyChatHeadsData(source: Any, target: Any) {

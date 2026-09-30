@@ -7,8 +7,10 @@ import com.stellar.lang.book.RefreshableBookScreen
 import com.stellar.lang.container.ContainerTranslationManager
 import com.stellar.lang.entity.EntityTranslationManager
 import com.stellar.lang.item.ItemTranslationManager
+import com.stellar.lang.map.MapBannerTranslationManager
 import com.stellar.lang.service.TranslationService
 import com.stellar.lang.sign.SignTranslationManager
+import com.stellar.lang.target.TargetManager
 import net.minecraft.client.KeyMapping
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.screens.Screen
@@ -17,8 +19,10 @@ import net.minecraft.client.gui.screens.inventory.BookViewScreen
 import net.minecraft.client.input.KeyEvent
 import net.minecraft.core.BlockPos
 import net.minecraft.world.entity.Entity
+import net.minecraft.world.entity.decoration.ItemFrame
 import net.minecraft.world.entity.player.Player
 import net.minecraft.world.item.ItemStack
+import net.minecraft.world.item.MapItem
 import net.minecraft.world.item.WritableBookItem
 import net.minecraft.world.item.WrittenBookItem
 import net.minecraft.world.level.block.entity.BaseContainerBlockEntity
@@ -100,6 +104,7 @@ object StellarLangInputHandler {
         blockEntityProvider = null
         heldItemProvider = null
         playerProvider = null
+        TargetManager.clearTarget()
     }
 
     private fun getMinecraft(): Minecraft? =
@@ -183,6 +188,7 @@ object StellarLangInputHandler {
 
     private fun resolveEntityTarget(): RefreshTarget.EntityTarget? {
         val entity = crosshairEntityProvider?.invoke()
+            ?: TargetManager.getTargetedEntity(getMinecraft())
             ?: runCatching {
                 getMinecraft()?.let { mc ->
                     mc.crosshairPickEntity ?: (mc.hitResult as? EntityHitResult)?.entity
@@ -192,7 +198,8 @@ object StellarLangInputHandler {
     }
 
     private fun resolveBlockTarget(): RefreshTarget? {
-        val mcHit = runCatching { getMinecraft()?.hitResult as? BlockHitResult }.getOrNull()
+        val mcHit = TargetManager.getTargetedBlockHit(getMinecraft())
+            ?: runCatching { getMinecraft()?.hitResult as? BlockHitResult }.getOrNull()
         val hit = blockHitProvider?.invoke() ?: mcHit
         if (hit == null || hit.type != HitResult.Type.BLOCK) return null
 
@@ -228,7 +235,7 @@ object StellarLangInputHandler {
         return when (target) {
             is RefreshTarget.Sign -> SignTranslationManager.refreshSign(target.sign)
             is RefreshTarget.Lectern -> retryLectern(target.lectern)
-            is RefreshTarget.EntityTarget -> EntityTranslationManager.refreshEntity(target.entity)
+            is RefreshTarget.EntityTarget -> retryEntity(target.entity)
             is RefreshTarget.HeldItem -> retryHeldItem(target.itemStack)
             is RefreshTarget.BookScreen -> {
                 (target.screen as? RefreshableBookScreen)?.stellarRefreshBook() ?: false
@@ -236,6 +243,24 @@ object StellarLangInputHandler {
             is RefreshTarget.ContainerScreenTarget -> ContainerTranslationManager.refreshScreen(target.screen)
             is RefreshTarget.ContainerBlockTarget -> ContainerTranslationManager.refreshBlockEntity(target.blockEntity)
         }
+    }
+
+    private fun retryEntity(entity: Entity): Boolean {
+        if (entity is ItemFrame && retryItemFrame(entity)) {
+            return true
+        }
+        return EntityTranslationManager.refreshEntity(entity)
+    }
+
+    private fun retryItemFrame(frame: ItemFrame): Boolean {
+        val framedItem = frame.item
+        if (framedItem.isEmpty) return false
+        if (framedItem.item is MapItem) {
+            val mapRefreshed = MapBannerTranslationManager.refreshMap(framedItem)
+            val itemRefreshed = ItemTranslationManager.refreshItem(framedItem)
+            return mapRefreshed || itemRefreshed
+        }
+        return ItemTranslationManager.refreshItem(framedItem)
     }
 
     private fun retryLectern(lectern: LecternBlockEntity): Boolean {
@@ -252,7 +277,12 @@ object StellarLangInputHandler {
         } else {
             false
         }
+        val mapRefreshed = if (item.item is MapItem) {
+            MapBannerTranslationManager.refreshMap(item)
+        } else {
+            false
+        }
         val itemRefreshed = ItemTranslationManager.refreshItem(item)
-        return bookRefreshed || itemRefreshed
+        return bookRefreshed || mapRefreshed || itemRefreshed
     }
 }

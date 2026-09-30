@@ -25,6 +25,7 @@ object LangClothConfigScreen {
     }
     private val isTesting = java.util.concurrent.atomic.AtomicBoolean(false)
     private var lastTestTimeMs = 0L
+    private var lastClearCacheTimeMs = 0L
     private const val TEST_DEBOUNCE_MS = 1000L
 
     fun create(parent: Screen?): Screen {
@@ -71,8 +72,17 @@ object LangClothConfigScreen {
             .setSaveConsumer { value -> config.targetLanguage.setValue(value.trim().lowercase(), true) }
             .build()
 
+        val hideIndicators = entries
+            .startBooleanToggle(Component.literal("Hide [T] and [...] Indicators"), config.hideIndicators.value())
+            .setDefaultValue(false)
+            .setTooltip(Component.literal("Hides visual [T] and [...] status badges on translated text"))
+            .setSaveConsumer { value -> config.hideIndicators.setValue(value, true) }
+            .build()
+
         category.addEntry(masterToggle)
         category.addEntry(targetLang)
+        category.addEntry(hideIndicators)
+        category.addEntry(buildClearCacheButton(entries))
     }
 
     @Suppress("LongMethod")
@@ -453,6 +463,31 @@ object LangClothConfigScreen {
             .setSaveConsumer { value -> config.translateSigns.setValue(value, true) }
             .build()
 
+        val signTooltipsEntry = entries
+            .startBooleanToggle(Component.literal("Sign Tooltips & Indicators"), config.signTooltips.value())
+            .setDefaultValue(true)
+            .setTooltip(
+                Component.literal("Renders floating [T] indicators and overflow tooltips when aiming at signs"),
+            )
+            .setSaveConsumer { value -> config.signTooltips.setValue(value, true) }
+            .build()
+
+        val signRaycastIntervalEntry = entries
+            .startIntSlider(
+                Component.literal("Sign Raycast Interval (ms)"),
+                config.signRaycastIntervalMs.value(),
+                StellarLangConfig.MIN_SIGN_RAYCAST_INTERVAL_MS,
+                StellarLangConfig.MAX_SIGN_RAYCAST_INTERVAL_MS,
+            )
+            .setDefaultValue(StellarLangConfig.DEFAULT_SIGN_RAYCAST_INTERVAL_MS)
+            .setTooltip(
+                Component.literal(
+                    "Throttle interval in milliseconds for sign line-of-sight raycasting (0 = every frame)",
+                ),
+            )
+            .setSaveConsumer { value -> config.signRaycastIntervalMs.setValue(value, true) }
+            .build()
+
         val booksEntry = entries
             .startBooleanToggle(Component.literal("Translate Books"), config.translateBooks.value())
             .setDefaultValue(true)
@@ -481,12 +516,22 @@ object LangClothConfigScreen {
             .setSaveConsumer { value -> config.translateContainers.setValue(value, true) }
             .build()
 
+        val mapBannersEntry = entries
+            .startBooleanToggle(Component.literal("Translate Map Banners"), config.translateMapBanners.value())
+            .setDefaultValue(true)
+            .setTooltip(Component.literal("Translates banner names and markers on maps"))
+            .setSaveConsumer { value -> config.translateMapBanners.setValue(value, true) }
+            .build()
+
         category.addEntry(chatEntry)
         category.addEntry(signsEntry)
+        category.addEntry(signTooltipsEntry)
+        category.addEntry(signRaycastIntervalEntry)
         category.addEntry(booksEntry)
         category.addEntry(entitiesEntry)
         category.addEntry(itemsEntry)
         category.addEntry(containersEntry)
+        category.addEntry(mapBannersEntry)
     }
 
     private fun buildControlsCategory(builder: ConfigBuilder, entries: ConfigEntryBuilder, config: StellarLangConfig) {
@@ -526,5 +571,32 @@ object LangClothConfigScreen {
 
         category.addEntry(cacheToDiskEntry)
         category.addEntry(maxCacheEntriesEntry)
+        category.addEntry(buildClearCacheButton(entries))
+    }
+
+    internal fun buildClearCacheButton(
+        entries: ConfigEntryBuilder,
+    ): me.shedaniel.clothconfig2.api.AbstractConfigListEntry<*> {
+        var lastToggleValue = false
+
+        return entries
+            .startBooleanToggle(Component.literal("Clear Translation Cache"), false)
+            .setYesNoTextSupplier { boolValue ->
+                if (boolValue != lastToggleValue) {
+                    lastToggleValue = boolValue
+                    lastClearCacheTimeMs = System.currentTimeMillis()
+                    TranslationService.clearAllCaches()
+                    showToast("Stellar Lang", "Translation cache cleared")
+                }
+                if (lastClearCacheTimeMs > 0L) {
+                    Component.literal("✅ Cache Cleared!")
+                } else {
+                    Component.literal("Click to Clear")
+                }
+            }
+            .setTooltip(
+                Component.literal("Clears in-memory and on-disk translation caches across all features"),
+            )
+            .build()
     }
 }

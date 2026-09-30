@@ -252,7 +252,27 @@ object SignTranslationManager {
         SignTooltipRenderer.renderSignTooltipIfLooking(extractor)
     }
 
+    @Suppress("NestedBlockDepth")
+    fun hasTranslatableText(signText: SignText): Boolean {
+        for (i in 0 until SignText.LINES) {
+            val message = signText.getMessage(i, false)
+            val str = message.string
+            if (str.isEmpty()) continue
+            for (j in 0 until str.length) {
+                val ch = str[j]
+                if (!ch.isWhitespace() && !SignFormatHelper.isBorderChar(ch)) {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    fun hasTranslatableText(sign: SignBlockEntity): Boolean =
+        hasTranslatableText(sign.frontText) || hasTranslatableText(sign.backText)
+
     fun extractSentence(signText: SignText): String {
+        if (!hasTranslatableText(signText)) return ""
         return signText.getMessages(false)
             .map { it.string.trim() }
             .filter { it.isNotEmpty() && !isPureFormattingLine(it) }

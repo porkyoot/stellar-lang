@@ -92,6 +92,7 @@ object OnnxInferenceEngine : AutoCloseable {
         if (envInitFailed) return null
         val existing = env
         if (existing != null) return existing
+        OnnxNativeManager.ensureNativeLibrariesReady()
         return try {
             val created = OrtEnvironment.getEnvironment()
             env = created
@@ -224,6 +225,9 @@ object OnnxInferenceEngine : AutoCloseable {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return null
 
+        val quick = com.stellar.lang.plugin.LanguageDetectionHelper.detectQuick(trimmed)
+        if (quick != null) return quick
+
         val environment = getOrInitEnv() ?: return null
         val session = getOrCreateDetectionSession() ?: return null
 
@@ -257,20 +261,11 @@ object OnnxInferenceEngine : AutoCloseable {
                     val logits = (outputTensor?.value as? Array<*>)?.get(0) as? FloatArray
 
                     if (logits != null) {
-                        var maxIdx = 0
-                        var maxVal = Float.NEGATIVE_INFINITY
-                        for (i in logits.indices) {
-                            if (logits[i] > maxVal) {
-                                maxVal = logits[i]
-                                maxIdx = i
-                            }
-                        }
-
-                        if (maxIdx in idToLanguage.indices) {
-                            idToLanguage[maxIdx]
-                        } else {
-                            null
-                        }
+                        com.stellar.lang.plugin.LanguageDetectionHelper.selectBestLanguage(
+                            logits,
+                            idToLanguage,
+                            trimmed,
+                        )
                     } else {
                         null
                     }
@@ -289,6 +284,9 @@ object OnnxInferenceEngine : AutoCloseable {
     fun translate(text: String, sourceLang: String?, targetLang: String): String? {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return null
+
+        val quick = com.stellar.lang.plugin.LanguageDetectionHelper.getQuickTranslation(trimmed, targetLang)
+        if (quick != null) return quick
 
         val environment = getOrInitEnv() ?: return null
         val session = getOrCreateTranslationSession(targetLang) ?: return null

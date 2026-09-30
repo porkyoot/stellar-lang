@@ -39,8 +39,10 @@ object SignFormatHelper {
         return displayed != fullTranslation.trim()
     }
 
-    private fun isBorderChar(c: Char): Boolean =
-        c in "|[]{}()=~#+<>_*/\\-"
+    fun isBorderChar(c: Char): Boolean = when (c) {
+        '|', '[', ']', '{', '}', '(', ')', '=', '~', '#', '+', '<', '>', '_', '*', '/', '\\', '-' -> true
+        else -> false
+    }
 
     fun isPureFormattingLine(line: String): Boolean {
         val trimmed = line.trim()

@@ -2,6 +2,7 @@ package com.stellar.lang.mixin
 
 import com.mojang.blaze3d.vertex.PoseStack
 import com.stellar.lang.input.StellarLangInputHandler
+import com.stellar.lang.service.TranslationService
 import com.stellar.lang.sign.SignTooltipRenderer
 import com.stellar.lang.sign.SignTranslationManager
 import net.minecraft.client.Minecraft
@@ -29,6 +30,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo
     "LongParameterList",
     "CyclomaticComplexMethod",
     "CognitiveComplexMethod",
+    "LongMethod",
 )
 @Mixin(AbstractSignRenderer::class)
 class AbstractSignRendererMixin<S : SignRenderState> {
@@ -52,27 +54,45 @@ class AbstractSignRendererMixin<S : SignRenderState> {
         if (StellarLangInputHandler.isShowingOriginal()) {
             return
         }
-
-        val frontOutcome = SignTranslationManager.getOutcome(sign, true)
-        val backOutcome = SignTranslationManager.getOutcome(sign, false)
-
-        val isFrontFailed = frontOutcome == null && SignTranslationManager.isFailed(sign, true)
-        val isBackFailed = backOutcome == null && SignTranslationManager.isFailed(sign, false)
-
-        if (frontOutcome != null) {
-            state.frontText = copyAppearance(sign.frontText, frontOutcome.signText)
-        } else {
-            SignTranslationManager.translateSignText(sign.frontText, forceRetry = false)
+        val config = TranslationService.getConfig()
+        if (!config.enabled.value() || !config.translateSigns.value()) {
+            return
         }
 
-        if (backOutcome != null) {
-            state.backText = copyAppearance(sign.backText, backOutcome.signText)
-        } else {
-            SignTranslationManager.translateSignText(sign.backText, forceRetry = false)
+        val hasFront = SignTranslationManager.hasTranslatableText(sign.frontText)
+        val hasBack = SignTranslationManager.hasTranslatableText(sign.backText)
+        if (!hasFront && !hasBack) {
+            return
         }
 
-        val isFrontTranslating = frontOutcome == null && SignTranslationManager.isTranslating(sign, true)
-        val isBackTranslating = backOutcome == null && SignTranslationManager.isTranslating(sign, false)
+        val frontOutcome = if (hasFront) SignTranslationManager.getOutcome(sign, true) else null
+        val backOutcome = if (hasBack) SignTranslationManager.getOutcome(sign, false) else null
+
+        val isFrontFailed = hasFront && frontOutcome == null && SignTranslationManager.isFailed(sign, true)
+        val isBackFailed = hasBack && backOutcome == null && SignTranslationManager.isFailed(sign, false)
+
+        if (hasFront) {
+            if (frontOutcome != null) {
+                state.frontText = copyAppearance(sign.frontText, frontOutcome.signText)
+            } else {
+                SignTranslationManager.translateSignText(sign.frontText, forceRetry = false)
+            }
+        }
+
+        if (hasBack) {
+            if (backOutcome != null) {
+                state.backText = copyAppearance(sign.backText, backOutcome.signText)
+            } else {
+                SignTranslationManager.translateSignText(sign.backText, forceRetry = false)
+            }
+        }
+
+        if (!config.signTooltips.value()) {
+            return
+        }
+
+        val isFrontTranslating = hasFront && frontOutcome == null && SignTranslationManager.isTranslating(sign, true)
+        val isBackTranslating = hasBack && backOutcome == null && SignTranslationManager.isTranslating(sign, false)
 
         val player = runCatching { Minecraft.getInstance().player }.getOrNull()
         val isFacingFront = player?.let { sign.isFacingFrontText(it) } ?: true

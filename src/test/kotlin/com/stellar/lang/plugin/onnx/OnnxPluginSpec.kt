@@ -148,14 +148,14 @@ class OnnxPluginSpec : FunSpec({
             OnnxInferenceEngine.resetSessions()
 
             val detector = OnnxLanguageDetectorPlugin()
-            val detected = detector.detectLanguage("Ta mère est pas prête")
-            detected shouldBe "fr"
-
-            val detectedEn = detector.detectLanguage("Your mother is not ready")
-            detectedEn shouldBe "en"
-
-            val detectedEs = detector.detectLanguage("Buenos días amigo")
-            detectedEs shouldBe "es"
+            detector.detectLanguage("Bonjour") shouldBe "fr"
+            detector.detectLanguage("Pantoufle") shouldBe "fr"
+            detector.detectLanguage("Fantome") shouldBe "fr"
+            detector.detectLanguage("Ta mère est pas la") shouldBe "fr"
+            detector.detectLanguage("Ta mère est pas prête") shouldBe "fr"
+            detector.detectLanguage("Trops de pluie sur le paradis") shouldBe "fr"
+            detector.detectLanguage("Your mother is not ready") shouldBe "en"
+            detector.detectLanguage("Buenos días amigo") shouldBe "es"
             OnnxInferenceEngine.resetSessions()
         }
     }
@@ -209,8 +209,8 @@ class OnnxPluginSpec : FunSpec({
         config.onnxModelDir.setValue(tempDir.path, false)
         OnnxInferenceEngine.resetSessions()
 
-        OnnxInferenceEngine.detectLanguage("Hello") shouldBe null
-        OnnxInferenceEngine.translate("Hello", "en", "es") shouldBe null
+        OnnxInferenceEngine.detectLanguage("Corrupted model test sentence with many random words") shouldBe null
+        OnnxInferenceEngine.translate("Corrupted model test sentence with many random words", "en", "es") shouldBe null
 
         tempDir.deleteRecursively()
         OnnxInferenceEngine.resetSessions()

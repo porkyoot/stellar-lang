@@ -18,7 +18,10 @@
     "EntityMixin",
     "KeyboardHandlerMixin",
     "OptionsMixin",
-    "AbstractContainerScreenMixin"
+    "AbstractContainerScreenMixin",
+    "MapRendererMixin",
+    "GameRendererMixin",
+    "OnlineServerEntryMixin"
   ],
   "injectors": {
     "defaultRequire": 1

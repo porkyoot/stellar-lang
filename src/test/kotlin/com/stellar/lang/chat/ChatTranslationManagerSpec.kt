@@ -8,6 +8,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import net.minecraft.ChatFormatting
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.TextColor
@@ -21,6 +22,7 @@ class ChatTranslationManagerSpec : FunSpec({
         config.targetLanguage.setValue("en", false)
         config.translationPlugin.setValue("libretranslate", false)
         config.detectionPlugin.setValue("libretranslate", false)
+        config.hideIndicators.setValue(false, false)
     }
 
     test("TrackedChatMessage state management and toggling") {
@@ -624,5 +626,494 @@ class ChatTranslationManagerSpec : FunSpec({
         tracked.translatedComponent!!.string shouldBe "[...] $text"
         tracked.translatedComponent!!.siblings.first().style.color shouldBe
             TextColor.fromLegacyFormat(ChatFormatting.GRAY)
+    }
+
+    test("translatable component prefix extraction does not duplicate message text") {
+        val translatable = Component.translatable("chat.type.text", "Player", "Hello")
+        val payload = ChatTranslationManager.extractChatPayload(translatable)
+        payload.messageText shouldBe "Hello"
+        payload.prefixComponent shouldNotBe null
+        payload.prefixComponent!!.string shouldBe "<Player> "
+
+        val translating = ChatTranslationManager.createTranslatingComponent(
+            100L,
+            payload.messageText,
+            payload.prefixComponent,
+        )
+        translating.string shouldBe "[...] <Player> Hello"
+        translating.string shouldNotContain "HelloHello"
+
+        val fakeResult = TranslationResult("Hello", "Bonjour", "en", "fr", false)
+        val translated = ChatTranslationManager.createTranslatedComponent(
+            100L,
+            fakeResult,
+            payload.prefixComponent,
+        )
+        translated.string shouldBe "[T] <Player> Bonjour"
+        translated.string shouldNotContain "HelloHello"
+    }
+
+    test("translation timeout transitions translating message to failed badge after 5 seconds") {
+        var refreshed = false
+        ChatTranslationManager.refreshScheduler = { refreshed = true }
+
+        val orig = Component.literal("<Player> Slow translation")
+        val payload = ChatTranslationManager.extractChatPayload(orig)
+        val tracked = ChatTranslationManager.TrackedChatMessage(
+            id = 7001L,
+            originalComponent = orig,
+            plainText = orig.string,
+            prefixComponent = payload.prefixComponent,
+            messageText = payload.messageText,
+        )
+        val translatingComp = ChatTranslationManager.createTranslatingComponent(
+            7001L,
+            payload.messageText,
+            payload.prefixComponent,
+        )
+        tracked.translatedComponent = translatingComp
+        tracked.isPending = true
+        tracked.currentAttempt = 1L
+
+        refreshed shouldBe false
+        ChatTranslationManager.handleTimeout(tracked, 1L)
+
+        refreshed shouldBe true
+        tracked.isPending shouldBe false
+        tracked.translatedComponent shouldNotBe null
+        val failed = tracked.translatedComponent!!
+        failed.string shouldContain "[T] "
+        failed.string shouldContain "<Player> Slow translation"
+        failed.string shouldNotContain "Slow translationSlow translation"
+        val badge = failed.siblings.first()
+        badge.style.color shouldBe TextColor.fromLegacyFormat(ChatFormatting.RED)
+        badge.style.isStrikethrough shouldBe true
+        TranslationService.isFailed("Slow translation") shouldBe true
+    }
+
+    test("timeout does not affect message if attempt has already changed or not pending") {
+        var refreshed = false
+        ChatTranslationManager.refreshScheduler = { refreshed = true }
+
+        val orig = Component.literal("Already done")
+        val tracked = ChatTranslationManager.TrackedChatMessage(
+            id = 7002L,
+            originalComponent = orig,
+            plainText = "Already done",
+            isPending = false,
+            currentAttempt = 2L,
+        )
+
+        ChatTranslationManager.handleTimeout(tracked, 1L)
+        refreshed shouldBe false
+
+        ChatTranslationManager.handleTimeout(tracked, 2L)
+        refreshed shouldBe false
+    }
+
+    test("triggerBackgroundChatTranslation reverts translating component when result is same language") {
+        var refreshed = false
+        ChatTranslationManager.refreshScheduler = { refreshed = true }
+
+        val orig = Component.literal("<Alice> Hello world")
+        val payload = ChatTranslationManager.extractChatPayload(orig)
+        val tracked = ChatTranslationManager.TrackedChatMessage(
+            id = 7003L,
+            originalComponent = orig,
+            plainText = orig.string,
+            prefixComponent = payload.prefixComponent,
+            messageText = payload.messageText,
+        )
+        tracked.translatedComponent = ChatTranslationManager.createTranslatingComponent(
+            7003L,
+            payload.messageText,
+            payload.prefixComponent,
+        )
+
+        val sameLangResult = TranslationResult("Hello world", "Hello world", "en", "en", true)
+        TranslationService.putCache(sameLangResult)
+
+        ChatTranslationManager.triggerBackgroundChatTranslation(tracked, payload.messageText)
+
+        refreshed shouldBe true
+        tracked.isPending shouldBe false
+        tracked.translatedComponent shouldBe null
+    }
+
+    test("isMatchingMessage matches GuiMessage containing toggle command click event") {
+        val orig = Component.literal("<Bob> Test matching")
+        val payload = ChatTranslationManager.extractChatPayload(orig)
+        val tracked = ChatTranslationManager.TrackedChatMessage(
+            id = 7004L,
+            originalComponent = orig,
+            plainText = orig.string,
+            prefixComponent = payload.prefixComponent,
+            messageText = payload.messageText,
+        )
+        val translating = ChatTranslationManager.createTranslatingComponent(
+            7004L,
+            payload.messageText,
+            payload.prefixComponent,
+        )
+
+        val guiMsg = net.minecraft.client.multiplayer.chat.GuiMessage(
+            1,
+            translating,
+            null,
+            net.minecraft.client.multiplayer.chat.GuiMessageSource.SYSTEM_CLIENT,
+            null,
+        )
+
+        // When tracked.translatedComponent is updated to translated text, guiMsg still holds translating
+        val fakeResult = TranslationResult("Test matching", "Test traduction", "en", "fr", false)
+        val translated = ChatTranslationManager.createTranslatedComponent(
+            7004L,
+            fakeResult,
+            payload.prefixComponent,
+        )
+        tracked.translatedComponent = translated
+
+        ChatTranslationManager.isMatchingMessage(guiMsg, tracked) shouldBe true
+    }
+
+    test("timeoutExecutor getter and setter and custom executor") {
+        val original = ChatTranslationManager.timeoutExecutor
+        ChatTranslationManager.timeoutExecutor = original
+        ChatTranslationManager.timeoutExecutor shouldBe original
+    }
+
+    test("sliceComponent with needed greater than text length") {
+        val method = ChatTranslationManager::class.java.getDeclaredMethod(
+            "sliceComponent",
+            Component::class.java,
+            Int::class.javaPrimitiveType,
+        )
+        method.isAccessible = true
+        val comp = Component.literal("abc")
+        val sliced = method.invoke(ChatTranslationManager, comp, 10) as Component
+        sliced.string shouldBe "abc"
+    }
+
+    test("buildPrefixComponent with empty components or empty list") {
+        val method = ChatTranslationManager::class.java.getDeclaredMethod(
+            "buildPrefixComponent",
+            List::class.java,
+            Int::class.javaPrimitiveType,
+        )
+        method.isAccessible = true
+        val emptyListResult = method.invoke(ChatTranslationManager, emptyList<Component>(), 5)
+        emptyListResult shouldBe null
+
+        val withEmptyString = listOf(Component.literal(""), Component.literal("<Tag> "))
+        val res = method.invoke(ChatTranslationManager, withEmptyString, 6) as? Component
+        res shouldNotBe null
+        res!!.string shouldBe "<Tag> "
+    }
+
+    test("TranslationService markFailed with targetLang and default targetLang") {
+        TranslationService.markFailed("unique_fail_text_1", "es")
+        TranslationService.isFailed("unique_fail_text_1", "es") shouldBe true
+
+        TranslationService.markFailed("unique_fail_text_2")
+        TranslationService.isFailed("unique_fail_text_2") shouldBe true
+    }
+
+    test("triggerBackgroundChatTranslation schedules timeout and fires handler") {
+        val customExecutor = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
+        val origExecutor = ChatTranslationManager.timeoutExecutor
+        ChatTranslationManager.timeoutExecutor = customExecutor
+
+        var refreshed = false
+        ChatTranslationManager.refreshScheduler = { refreshed = true }
+
+        val orig = Component.literal("<Eve> Timeout trigger test")
+        val payload = ChatTranslationManager.extractChatPayload(orig)
+        val tracked = ChatTranslationManager.TrackedChatMessage(
+            id = 7005L,
+            originalComponent = orig,
+            plainText = orig.string,
+            prefixComponent = payload.prefixComponent,
+            messageText = payload.messageText,
+        )
+        tracked.translatedComponent = ChatTranslationManager.createTranslatingComponent(
+            7005L,
+            payload.messageText,
+            payload.prefixComponent,
+        )
+
+        ChatTranslationManager.triggerBackgroundChatTranslation(tracked, payload.messageText)
+
+        ChatTranslationManager.handleTimeout(tracked, tracked.currentAttempt)
+        refreshed shouldBe true
+        tracked.translatedComponent!!.string shouldContain "[T] "
+
+        ChatTranslationManager.timeoutExecutor = origExecutor
+        customExecutor.shutdownNow()
+    }
+
+    test("updateChatDisplay when chatAccessorProvider returns null") {
+        val updateMethod = ChatTranslationManager::class.java.getDeclaredMethod(
+            "updateChatDisplay",
+            ChatTranslationManager.TrackedChatMessage::class.java,
+        )
+        updateMethod.isAccessible = true
+        ChatTranslationManager.chatAccessorProvider = { null }
+        val tracked = ChatTranslationManager.TrackedChatMessage(99_999L, Component.literal("x"), "x")
+        updateMethod.invoke(ChatTranslationManager, tracked)
+        ChatTranslationManager.chatAccessorProvider = null
+    }
+
+    test("TranslationService normalizeLanguageCode edge cases") {
+        val method = TranslationService::class.java.getDeclaredMethod(
+            "normalizeLanguageCode",
+            String::class.java,
+        )
+        method.isAccessible = true
+        method.invoke(TranslationService, "lol_us") shouldBe "en"
+        method.invoke(TranslationService, "toolonglanguage") shouldBe "en"
+        method.invoke(TranslationService, "x") shouldBe "en"
+        method.invoke(TranslationService, null as String?) shouldBe "en"
+    }
+
+    test("buildPrefixComponent flattens component with siblings when within prefixLength") {
+        val method = ChatTranslationManager::class.java.getDeclaredMethod(
+            "buildPrefixComponent",
+            List::class.java,
+            Int::class.javaPrimitiveType,
+        )
+        method.isAccessible = true
+        val compWithSiblings = Component.literal("<").append(Component.literal("Dev> "))
+        val res = method.invoke(ChatTranslationManager, listOf(compWithSiblings), 10) as? Component
+        res shouldNotBe null
+        res!!.string shouldBe "<Dev> "
+        res.siblings.size shouldBe 1
+    }
+
+    test("updateChatDisplayWithAccessor when translatedComponent is null uses originalComponent") {
+        val orig = Component.literal("No translation")
+        val tracked = ChatTranslationManager.TrackedChatMessage(
+            id = 8888L,
+            originalComponent = orig,
+            plainText = "No translation",
+            translatedComponent = null,
+            isShowingOriginal = false,
+        )
+        val messageList = mutableListOf<net.minecraft.client.multiplayer.chat.GuiMessage>()
+        val dummyMsg = net.minecraft.client.multiplayer.chat.GuiMessage(
+            1,
+            orig,
+            null,
+            net.minecraft.client.multiplayer.chat.GuiMessageSource.SYSTEM_CLIENT,
+            null,
+        )
+        messageList.add(dummyMsg)
+
+        val fakeAccessor = object : com.stellar.lang.mixin.ChatComponentAccessor {
+            override fun stellarGetAllMessages(): MutableList<net.minecraft.client.multiplayer.chat.GuiMessage> =
+                messageList
+
+            @Suppress("EmptyFunctionBlock")
+            override fun stellarRefreshTrimmedMessages() {}
+        }
+
+        ChatTranslationManager.updateChatDisplayWithAccessor(fakeAccessor, tracked)
+        messageList[0].content() shouldBe orig
+    }
+
+    test("isMatchingMessage matches when text equals translatedComponent string but not plainText") {
+        val orig = Component.literal("Original text")
+        val trans = Component.literal("Translated text")
+        val tracked = ChatTranslationManager.TrackedChatMessage(
+            id = 8889L,
+            originalComponent = orig,
+            plainText = "Original text",
+            translatedComponent = trans,
+        )
+        // A message with plain string equal to translated text but not the same Component instance
+        val guiMsg = net.minecraft.client.multiplayer.chat.GuiMessage(
+            1,
+            Component.literal("Translated text"),
+            null,
+            net.minecraft.client.multiplayer.chat.GuiMessageSource.SYSTEM_CLIENT,
+            null,
+        )
+        ChatTranslationManager.isMatchingMessage(guiMsg, tracked) shouldBe true
+    }
+
+    test("ChatTranslationManager respects hideIndicators when creating components") {
+        val config = TranslationService.getConfig()
+        config.hideIndicators.setValue(true, false)
+        try {
+            val fakeResult = TranslationResult("Bonjour", "Hello", "fr", "en", false)
+            val prefix = Component.literal("<Dev1lroot> ")
+            val transComp = ChatTranslationManager.createTranslatedComponent(1234L, fakeResult, prefix)
+            transComp.string shouldNotContain "[T]"
+            transComp.string shouldBe "<Dev1lroot> Hello"
+
+            val failedComp = ChatTranslationManager.createFailedComponent(1234L, "Bonjour", prefix)
+            failedComp.string shouldNotContain "[T]"
+            failedComp.string shouldBe "<Dev1lroot> Bonjour"
+
+            val translatingComp = ChatTranslationManager.createTranslatingComponent(1234L, "Bonjour", prefix)
+            translatingComp.string shouldNotContain "[...]"
+            translatingComp.string shouldBe "<Dev1lroot> Bonjour"
+
+            // Verify incoming message processing without indicators
+            TranslationService.putCache(fakeResult)
+            val incoming = Component.literal("<Dev1lroot> Bonjour")
+            val processed = ChatTranslationManager.processIncomingMessage(incoming)
+            processed.string shouldNotContain "[T]"
+            processed.string shouldBe "<Dev1lroot> Hello"
+        } finally {
+            config.hideIndicators.setValue(false, false)
+        }
+    }
+
+    test("does not translate death messages with translatable key") {
+        val deathMsg = Component.translatable(
+            "death.attack.player",
+            Component.literal("Steve"),
+            Component.literal("Alex"),
+        )
+        ChatTranslationManager.processIncomingMessage(deathMsg) shouldBe deathMsg
+        ChatTranslationManager.processIncomingMessage(
+            deathMsg,
+            net.minecraft.client.multiplayer.chat.GuiMessageSource.SYSTEM_SERVER,
+        ) shouldBe deathMsg
+    }
+
+    test("does not translate plain text death messages without player prefix") {
+        val death1 = Component.literal("Steve drowned")
+        ChatTranslationManager.processIncomingMessage(death1) shouldBe death1
+
+        val death2 = Component.literal("Alex was slain by Zombie")
+        ChatTranslationManager.processIncomingMessage(death2) shouldBe death2
+
+        val death3 = Component.literal("Dev1lroot fell from a high place")
+        ChatTranslationManager.processIncomingMessage(
+            death3,
+            net.minecraft.client.multiplayer.chat.GuiMessageSource.SYSTEM_SERVER,
+        ) shouldBe death3
+    }
+
+    test("does not translate achievement and advancement messages") {
+        val advMsg = Component.translatable(
+            "chat.type.advancement.task",
+            Component.literal("Steve"),
+            Component.literal("Stone Age"),
+        )
+        ChatTranslationManager.processIncomingMessage(advMsg) shouldBe advMsg
+        ChatTranslationManager.processIncomingMessage(
+            advMsg,
+            net.minecraft.client.multiplayer.chat.GuiMessageSource.SYSTEM_SERVER,
+        ) shouldBe advMsg
+
+        val plainAdv = Component.literal("Steve has made the advancement [Suit Up]")
+        ChatTranslationManager.processIncomingMessage(plainAdv) shouldBe plainAdv
+    }
+
+    test("does not translate player join and leave messages") {
+        val joinMsg = Component.translatable("multiplayer.player.joined", Component.literal("Steve"))
+        ChatTranslationManager.processIncomingMessage(joinMsg) shouldBe joinMsg
+
+        val plainLeave = Component.literal("Steve left the game")
+        ChatTranslationManager.processIncomingMessage(plainLeave) shouldBe plainLeave
+    }
+
+    test("does not translate client system messages") {
+        val clientMsg = Component.literal("Debug: Client chunk reloaded")
+        ChatTranslationManager.processIncomingMessage(
+            clientMsg,
+            net.minecraft.client.multiplayer.chat.GuiMessageSource.SYSTEM_CLIENT,
+        ) shouldBe clientMsg
+    }
+
+    test("translates player chat message even if it mentions dying") {
+        val playerChat = Component.literal("<Steve> I died in the nether")
+        val fakeResult = TranslationResult("I died in the nether", "Je suis mort dans le nether", "en", "en", false)
+        TranslationService.putCache(fakeResult)
+        val processed = ChatTranslationManager.processIncomingMessage(
+            playerChat,
+            net.minecraft.client.multiplayer.chat.GuiMessageSource.PLAYER,
+        )
+        processed shouldNotBe playerChat
+        processed.string shouldContain "Je suis mort dans le nether"
+    }
+
+    test("translates server MOTD and welcome messages") {
+        val motd1 = Component.literal("Welcome to the server! Please read the rules.")
+        val res1 = TranslationResult(
+            "Welcome to the server! Please read the rules.",
+            "Bienvenue sur le serveur ! Veuillez lire les règles.",
+            "en",
+            "en",
+            false,
+        )
+        TranslationService.putCache(res1)
+        val processed1 = ChatTranslationManager.processIncomingMessage(
+            motd1,
+            net.minecraft.client.multiplayer.chat.GuiMessageSource.SYSTEM_SERVER,
+        )
+        processed1 shouldNotBe motd1
+        processed1.string shouldContain "Bienvenue sur le serveur"
+
+        val motd2 = Component.literal("MOTD: Double Coins Weekend is active!")
+        val res2 = TranslationResult(
+            "Double Coins Weekend is active!",
+            "Le week-end double pièces est actif !",
+            "en",
+            "en",
+            false,
+        )
+        TranslationService.putCache(res2)
+        val processed2 = ChatTranslationManager.processIncomingMessage(
+            motd2,
+            net.minecraft.client.multiplayer.chat.GuiMessageSource.SYSTEM_SERVER,
+        )
+        processed2 shouldNotBe motd2
+        processed2.string shouldContain "Le week-end double pièces est actif"
+    }
+
+    test("isAdminOrCommandMessage identifies admin and command message keys") {
+        val cmd = Component.translatable("commands.give.success")
+        val admin = Component.translatable("chat.type.admin")
+        val gameMode = Component.translatable("gameMode.changed")
+        val normal = Component.translatable("chat.type.text")
+
+        ChatTranslationManager.isAdminOrCommandMessage(cmd) shouldBe true
+        ChatTranslationManager.isAdminOrCommandMessage(admin) shouldBe true
+        ChatTranslationManager.isAdminOrCommandMessage(gameMode) shouldBe true
+        ChatTranslationManager.isAdminOrCommandMessage(normal) shouldBe false
+    }
+
+    test("isAdvancementMessage and isJoinLeaveMessage check translatable keys") {
+        val adv1 = Component.translatable("chat.type.advancement.task")
+        val adv2 = Component.translatable("advancement.test")
+        val adv3 = Component.translatable("advancements.test")
+        ChatTranslationManager.isAdvancementMessage(adv1, "foo") shouldBe true
+        ChatTranslationManager.isAdvancementMessage(adv2, "foo") shouldBe true
+        ChatTranslationManager.isAdvancementMessage(adv3, "foo") shouldBe true
+
+        val join = Component.translatable("multiplayer.player.joined")
+        val leave = Component.translatable("multiplayer.player.left")
+        ChatTranslationManager.isJoinLeaveMessage(join, "foo") shouldBe true
+        ChatTranslationManager.isJoinLeaveMessage(leave, "foo") shouldBe true
+    }
+
+    test("hasTranslatableKey traverses nested args and siblings") {
+        val inner = Component.translatable("death.attack.cactus")
+        val outerWithArg = Component.translatable("chat.type.text", "Steve", inner)
+        val outerWithSibling = Component.empty().append(Component.translatable("death.attack.drown"))
+
+        ChatTranslationManager.hasTranslatableKey(outerWithArg) { it.startsWith("death.") } shouldBe true
+        ChatTranslationManager.hasTranslatableKey(outerWithSibling) { it.startsWith("death.") } shouldBe true
+    }
+
+    test("isMotdMessage detects server news and translatable welcome keys") {
+        val news = Component.literal("Breaking: server news update")
+        ChatTranslationManager.isMotdMessage(news, news.string) shouldBe true
+
+        val welcomeTranslatable = Component.translatable("server.welcome.title")
+        ChatTranslationManager.isMotdMessage(welcomeTranslatable, "Title") shouldBe true
     }
 })

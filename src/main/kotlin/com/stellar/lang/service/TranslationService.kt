@@ -34,6 +34,7 @@ import java.util.concurrent.TimeUnit
     "CyclomaticComplexMethod",
     "NestedBlockDepth",
     "LoopWithTooManyJumpStatements",
+    "ComplexCondition",
 )
 object TranslationService {
     private val logger: Logger = LoggerFactory.getLogger(StellarLangMod.MOD_ID)
@@ -334,10 +335,15 @@ object TranslationService {
     }
 
     private fun detectLanguage(text: String): String {
+        val quick = com.stellar.lang.plugin.LanguageDetectionHelper.detectQuick(text)
+        if (quick != null) return quick
+
         val detector = PluginRegistry.getActiveDetector()
         return kotlinx.coroutines.runBlocking {
             val detected = detector.detectLanguage(text)
-            if (!detected.isNullOrBlank() && detected != UNKNOWN_LANG) {
+            if (!detected.isNullOrBlank() && detected != UNKNOWN_LANG &&
+                detected in com.stellar.lang.plugin.LanguageDetectionHelper.SUPPORTED_LANGUAGES
+            ) {
                 detected
             } else {
                 runCatching {
@@ -347,9 +353,16 @@ object TranslationService {
                     ) {
                         null
                     } else {
-                        fallback?.detectLanguage(text)
+                        val fbDetected = fallback?.detectLanguage(text)
+                        if (!fbDetected.isNullOrBlank() && fbDetected != UNKNOWN_LANG &&
+                            fbDetected in com.stellar.lang.plugin.LanguageDetectionHelper.SUPPORTED_LANGUAGES
+                        ) {
+                            fbDetected
+                        } else {
+                            detected?.takeIf { it != UNKNOWN_LANG }
+                        }
                     }
-                }.getOrNull() ?: UNKNOWN_LANG
+                }.getOrNull() ?: detected ?: UNKNOWN_LANG
             }
         }
     }
@@ -891,6 +904,12 @@ object TranslationService {
         return TranslationCache.isFailed(key) || TranslationCache.isCircuitBreakerOpen()
     }
 
+    fun markFailed(text: String, targetLang: String = getTargetLanguage()) {
+        val key = cacheKey(text, targetLang)
+        TranslationCache.markFailed(key)
+        failedRequests[key] = FailedRequest(text, targetLang, System.currentTimeMillis())
+    }
+
     fun cacheKey(text: String, targetLang: String): String = TranslationCache.cacheKey(text, targetLang)
 
     fun addSuccessListener(listener: (TranslationResult) -> Unit) {
@@ -939,6 +958,19 @@ object TranslationService {
     fun clearCache() {
         TranslationCache.clear()
         failedRequests.clear()
+    }
+
+    fun clearAllCaches() {
+        clearCache()
+        TranslationCache.clearDiskCache()
+        com.stellar.lang.chat.ChatTranslationManager.clearCache()
+        com.stellar.lang.sign.SignTranslationManager.clearCache()
+        com.stellar.lang.item.ItemTranslationManager.clearCache()
+        com.stellar.lang.entity.EntityTranslationManager.clearCache()
+        com.stellar.lang.container.ContainerTranslationManager.clearCache()
+        com.stellar.lang.book.BookTranslationManager.clearCache()
+        com.stellar.lang.map.MapBannerTranslationManager.clearCache()
+        com.stellar.lang.motd.ServerMotdTranslationManager.clearCache()
     }
 
     fun testConnection(

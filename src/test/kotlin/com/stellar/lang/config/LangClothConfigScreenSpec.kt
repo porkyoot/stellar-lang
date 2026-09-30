@@ -48,6 +48,12 @@ class LangClothConfigScreenSpec : FunSpec({
         config.translateSigns.setValue(false, false)
         config.translateSigns.value() shouldBe false
 
+        config.signTooltips.setValue(false, false)
+        config.signTooltips.value() shouldBe false
+
+        config.signRaycastIntervalMs.setValue(150, false)
+        config.signRaycastIntervalMs.value() shouldBe 150
+
         config.translateBooks.setValue(false, false)
         config.translateBooks.value() shouldBe false
 
@@ -56,6 +62,15 @@ class LangClothConfigScreenSpec : FunSpec({
 
         config.translateItems.setValue(false, false)
         config.translateItems.value() shouldBe false
+
+        config.translateContainers.setValue(false, false)
+        config.translateContainers.value() shouldBe false
+
+        config.translateMapBanners.setValue(false, false)
+        config.translateMapBanners.value() shouldBe false
+
+        config.hideIndicators.setValue(true, false)
+        config.hideIndicators.value() shouldBe true
 
         config.showOriginalKey.setValue(Key.KEY_PERIOD, false)
         config.showOriginalKey.value() shouldBe Key.KEY_PERIOD
