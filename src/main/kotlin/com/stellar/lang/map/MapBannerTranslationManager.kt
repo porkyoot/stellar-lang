@@ -38,9 +38,13 @@ object MapBannerTranslationManager {
     }
 
     internal fun onTranslationSuccess(result: TranslationResult) {
-        if (result.isSameLanguage) return
         val targetLang = result.targetLanguage
         val textKey = buildTextKey(targetLang, result.originalText)
+        if (result.isSameLanguage) {
+            failedBanners.remove(textKey)
+            textComponentCache.remove(textKey)
+            return
+        }
         failedBanners.remove(textKey)
         textComponentCache[textKey] = createFormattedName(result.translatedText)
     }
@@ -63,6 +67,9 @@ object MapBannerTranslationManager {
             if (result != null && !result.isSameLanguage) {
                 failedBanners.remove(textKey)
                 textComponentCache[textKey] = createFormattedName(result.translatedText)
+            } else if (result != null && result.isSameLanguage) {
+                failedBanners.remove(textKey)
+                textComponentCache.remove(textKey)
             } else if (result == null) {
                 failedBanners.add(textKey)
                 textComponentCache[textKey] = createFailedName(clean)
@@ -171,6 +178,9 @@ object MapBannerTranslationManager {
                 if (result != null && !result.isSameLanguage) {
                     failedBanners.remove(textKey)
                     textComponentCache[textKey] = createFormattedName(result.translatedText)
+                } else if (result != null && result.isSameLanguage) {
+                    failedBanners.remove(textKey)
+                    textComponentCache.remove(textKey)
                 } else if (result == null) {
                     failedBanners.add(textKey)
                     textComponentCache[textKey] = createFailedName(plainText)
@@ -186,6 +196,9 @@ object MapBannerTranslationManager {
             if (result != null && !result.isSameLanguage) {
                 failedBanners.remove(textKey)
                 textComponentCache[textKey] = createFormattedName(result.translatedText)
+            } else if (result != null && result.isSameLanguage) {
+                failedBanners.remove(textKey)
+                textComponentCache.remove(textKey)
             } else if (result == null && TranslationService.isFailed(plainText, targetLang)) {
                 failedBanners.add(textKey)
                 textComponentCache[textKey] = createFailedName(plainText)
@@ -213,23 +226,27 @@ object MapBannerTranslationManager {
             StellarLangInputHandler.isShowingOriginal()
         if (disabled) return null
 
-        val text = original.string.trim()
-        val isBadgePrefix = text.startsWith("[T]") || text.startsWith("[...]")
-        return if (text.length < MIN_TRANSLATABLE_LENGTH || isBadgePrefix) null else text
+        val text = com.stellar.lang.format.FormattingTagHelper.componentToFormattedText(original).trim()
+        val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(text)
+        val isBadgePrefix = clean.startsWith("[T]") || clean.startsWith("[...]")
+        return if (clean.length < MIN_TRANSLATABLE_LENGTH || isBadgePrefix) null else text
     }
 
     private fun createFormattedName(translatedText: String): MutableComponent {
         val badge = TranslationBadgeHelper.createBadge(failed = false, trailingSpace = true)
-        return Component.empty().append(badge).append(Component.literal(translatedText))
+        val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(translatedText)
+        return Component.empty().append(badge).append(textComp)
     }
 
     private fun createTranslatingName(originalText: String): MutableComponent {
         val badge = TranslationBadgeHelper.createTranslatingBadge(trailingSpace = true)
-        return Component.empty().append(badge).append(Component.literal(originalText))
+        val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(originalText)
+        return Component.empty().append(badge).append(textComp)
     }
 
     private fun createFailedName(originalText: String): MutableComponent {
         val badge = TranslationBadgeHelper.createBadge(failed = true, trailingSpace = true)
-        return Component.empty().append(badge).append(Component.literal(originalText))
+        val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(originalText)
+        return Component.empty().append(badge).append(textComp)
     }
 }

@@ -2,34 +2,28 @@ package com.stellar.lang.mixin
 
 import com.stellar.lang.target.TargetManager
 import net.minecraft.client.Minecraft
-import net.minecraft.client.renderer.GameRenderer
 import net.minecraft.world.entity.Entity
 import net.minecraft.world.entity.projectile.ProjectileUtil
 import net.minecraft.world.phys.BlockHitResult
 import net.minecraft.world.phys.EntityHitResult
 import net.minecraft.world.phys.HitResult
-import org.spongepowered.asm.mixin.Final
 import org.spongepowered.asm.mixin.Mixin
-import org.spongepowered.asm.mixin.Shadow
 import org.spongepowered.asm.mixin.injection.At
 import org.spongepowered.asm.mixin.injection.Inject
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo
 
 /**
- * Mixin into GameRenderer to capture targeted block and entity on crosshair pick.
+ * Mixin into Minecraft to capture targeted block and entity on crosshair pick.
  */
 @Suppress("UnusedPrivateMember")
-@Mixin(GameRenderer::class)
-class GameRendererMixin {
-    @Shadow
-    @Final
-    private lateinit var minecraft: Minecraft
-
+@Mixin(Minecraft::class)
+abstract class MinecraftMixin {
     @Inject(method = ["pick(F)V"], at = [At("TAIL")])
     private fun stellarOnPick(partialTicks: Float, ci: CallbackInfo) {
-        val hit = minecraft.hitResult
+        val mc = this as Any as? Minecraft ?: return
+        val hit = mc.hitResult
         val blockHit = hit as? BlockHitResult
-        val entityHit = minecraft.crosshairPickEntity ?: (hit as? EntityHitResult)?.entity
+        val entityHit = mc.crosshairPickEntity ?: (hit as? EntityHitResult)?.entity
 
         if (blockHit != null && blockHit.type == HitResult.Type.BLOCK) {
             TargetManager.updateTarget(
@@ -49,15 +43,15 @@ class GameRendererMixin {
             return
         }
 
-        val cameraEntity = minecraft.cameraEntity
-        if (canPickExtended(cameraEntity)) {
+        val cameraEntity = mc.cameraEntity
+        if (canPickExtended(mc, cameraEntity)) {
             pickExtendedTargets(cameraEntity!!, partialTicks)
         }
     }
 
-    private fun canPickExtended(camera: Entity?): Boolean {
+    private fun canPickExtended(mc: Minecraft, camera: Entity?): Boolean {
         if (camera == null) return false
-        return minecraft.level != null && minecraft.player != null
+        return mc.level != null && mc.player != null
     }
 
     private fun pickExtendedTargets(cameraEntity: Entity, partialTicks: Float) {

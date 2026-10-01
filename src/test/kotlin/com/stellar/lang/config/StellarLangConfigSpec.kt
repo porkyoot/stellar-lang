@@ -14,6 +14,9 @@ class StellarLangConfigSpec : FunSpec({
         config.enabled.value() shouldBe true
         config.apiHost.value() shouldBe "https://libretranslate.com"
         config.apiKey.value() shouldBe ""
+        config.deeplApiKey.value() shouldBe ""
+        config.deeplApiHost.value() shouldBe "auto"
+        config.deeplFormality.value() shouldBe "default"
         config.targetLanguage.value() shouldBe "auto"
         config.translationPlugin.value() shouldBe "onnx"
         config.detectionPlugin.value() shouldBe "onnx"
@@ -21,6 +24,7 @@ class StellarLangConfigSpec : FunSpec({
         config.onnxAutoDownload.value() shouldBe true
         config.onnxExecutionThreads.value() shouldBe StellarLangConfig.DEFAULT_ONNX_THREADS
         config.translateChat.value() shouldBe true
+        config.translatePlayerNames.value() shouldBe false
         config.translateSigns.value() shouldBe true
         config.signTooltips.value() shouldBe true
         config.signRaycastIntervalMs.value() shouldBe StellarLangConfig.DEFAULT_SIGN_RAYCAST_INTERVAL_MS
@@ -32,8 +36,20 @@ class StellarLangConfigSpec : FunSpec({
         config.hideIndicators.value() shouldBe false
         config.showOriginalKey.value() shouldBe Key.KEY_COMMA
 
+        config.deeplApiKey.setValue("test_key:fx", true)
+        config.deeplApiKey.value() shouldBe "test_key:fx"
+
+        config.deeplApiHost.setValue("https://custom.deepl.com", true)
+        config.deeplApiHost.value() shouldBe "https://custom.deepl.com"
+
+        config.deeplFormality.setValue("more", true)
+        config.deeplFormality.value() shouldBe "more"
+
         config.hideIndicators.setValue(true, true)
         config.hideIndicators.value() shouldBe true
+
+        config.translatePlayerNames.setValue(true, true)
+        config.translatePlayerNames.value() shouldBe true
 
         config.translateMapBanners.setValue(false, true)
         config.translateMapBanners.value() shouldBe false

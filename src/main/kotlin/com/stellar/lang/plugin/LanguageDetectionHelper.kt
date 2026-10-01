@@ -189,6 +189,15 @@ object LanguageDetectionHelper {
         "parasol", "maison", "chose", "arrière", "arriere", "panneau", "monde",
     )
 
+    private val ENGLISH_SPECIFIC_WORDS = setOf(
+        "the", "is", "are", "was", "were", "and", "or", "in", "on", "at", "to", "for",
+        "with", "from", "by", "of", "about", "this", "that", "these", "those",
+        "have", "has", "had", "will", "would", "can", "could", "should",
+        "house", "home", "portal", "chest", "storage", "door", "bed", "box", "mail",
+        "mailbox", "iron", "gold", "diamond", "sword", "axe", "pickaxe", "shovel",
+        "stop", "fox", "sleepy", "castle", "outpost", "north", "south", "east", "west",
+    )
+
     /**
      * Attempts fast dictionary / script-based language identification.
      * Returns a 2-letter language code if high-confidence match is found, or null otherwise.
@@ -207,7 +216,11 @@ object LanguageDetectionHelper {
 
         // 3. Short phrase function word heuristics
         val words = clean.split(Regex("\\s+")).filter { it.isNotEmpty() }
-        if (words.size in 2..7) {
+        if (words.size in 1..10) {
+            val englishHits = words.count { it in ENGLISH_SPECIFIC_WORDS }
+            if (englishHits >= 2 || (englishHits >= 1 && words.size <= 2)) {
+                return "en"
+            }
             val frenchHits = words.count { it in FRENCH_SPECIFIC_WORDS }
             if (frenchHits >= 2 || (frenchHits >= 1 && (clean.contains("è") || clean.contains("é") || clean.contains("ê")))) {
                 return "fr"

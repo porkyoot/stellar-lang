@@ -320,7 +320,37 @@ class ChatTranslationManagerSpec : FunSpec({
         val payload = ChatTranslationManager.extractChatPayload(chatHeadsMessage)
         payload.messageText shouldBe "Bonjour tout le monde"
         payload.prefixComponent shouldNotBe null
-        payload.prefixComponent!!.string shouldBe "<[Dev1lroot head]Dev1lroot> "
+    }
+
+    test("extractChatPayload with Chat Heads sprite glyph does not duplicate message text") {
+        val headComp = Component.literal("\uFFFC")
+        val chatHeadsMessage = Component.empty()
+            .append(Component.literal("<"))
+            .append(headComp)
+            .append(Component.literal("Porkyoot"))
+            .append(Component.literal("> "))
+            .append(Component.literal("Bonjour"))
+
+        val payload = ChatTranslationManager.extractChatPayload(chatHeadsMessage)
+        payload.messageText shouldBe "Bonjour"
+        payload.prefixComponent shouldNotBe null
+        payload.prefixComponent!!.string shouldBe "<\uFFFCPorkyoot> "
+
+        val failedComp = ChatTranslationManager.createFailedComponent(
+            123L,
+            payload.messageText,
+            payload.prefixComponent,
+        )
+        failedComp.string shouldBe "[T] <\uFFFCPorkyoot> Bonjour"
+        failedComp.string shouldNotContain "BonjourBonjour"
+
+        val translatingComp = ChatTranslationManager.createTranslatingComponent(
+            123L,
+            payload.messageText,
+            payload.prefixComponent,
+        )
+        translatingComp.string shouldBe "[...] <\uFFFCPorkyoot> Bonjour"
+        translatingComp.string shouldNotContain "BonjourBonjour"
     }
 
     test("extractChatPayload separates standard player brackets and colon prefixes") {
@@ -1115,5 +1145,39 @@ class ChatTranslationManagerSpec : FunSpec({
 
         val welcomeTranslatable = Component.translatable("server.welcome.title")
         ChatTranslationManager.isMotdMessage(welcomeTranslatable, "Title") shouldBe true
+    }
+
+    test("createTranslatedComponent handles same language with and without prefix") {
+        val sameResult = TranslationResult("Hello", "Hello", "en", "en", true)
+        val withoutPrefix = ChatTranslationManager.createTranslatedComponent(1L, sameResult)
+        withoutPrefix.string shouldBe "Hello"
+        withoutPrefix.string.contains("[T]") shouldBe false
+
+        val prefix = Component.literal("<Player> ")
+        val withPrefix = ChatTranslationManager.createTranslatedComponent(2L, sameResult, prefix)
+        withPrefix.string shouldBe "<Player> Hello"
+        withPrefix.string.contains("[T]") shouldBe false
+    }
+
+    test("onTranslationSuccess reverts pending message on same language") {
+        var refreshed = false
+        ChatTranslationManager.refreshScheduler = { refreshed = true }
+
+        val comp = Component.literal("<User> Bonjour")
+        val tracked = ChatTranslationManager.TrackedChatMessage(
+            id = 9999L,
+            originalComponent = comp,
+            plainText = "<User> Bonjour",
+            messageText = "Bonjour",
+            isPending = true,
+        )
+        ChatTranslationManager.trackedMessages[9999L] = tracked
+
+        val sameResult = TranslationResult("Bonjour", "Bonjour", "en", "en", true)
+        ChatTranslationManager.onTranslationSuccess(sameResult)
+
+        refreshed shouldBe true
+        tracked.isPending shouldBe false
+        tracked.translatedComponent shouldBe null
     }
 })

@@ -360,5 +360,11 @@ class ContainerTranslationManagerSpec : FunSpec({
         ContainerTranslationManager.refreshContainer(text)
         TranslationCache.completeInFlight(key, null)
         ContainerTranslationManager.failedContainers.contains(cacheKey) shouldBe true
+
+        // refreshContainer success
+        ContainerTranslationManager.clearCache()
+        ContainerTranslationManager.refreshContainer(text)
+        TranslationCache.completeInFlight(key, successResult)
+        ContainerTranslationManager.containerCache.containsKey(cacheKey) shouldBe true
     }
 })

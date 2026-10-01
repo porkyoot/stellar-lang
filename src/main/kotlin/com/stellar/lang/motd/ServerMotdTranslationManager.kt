@@ -14,13 +14,17 @@ import java.util.WeakHashMap
 object ServerMotdTranslationManager {
     private const val MIN_MOTD_LENGTH = 2
 
+    internal var motdField: java.lang.reflect.Field? = runCatching {
+        ServerData::class.java.getDeclaredField("motd").apply { isAccessible = true }
+    }.getOrNull()
+
     private val originalMotds = Collections.synchronizedMap(WeakHashMap<ServerData, Component>())
     private val translatedMotds = Collections.synchronizedMap(WeakHashMap<ServerData, Component>())
     private val pendingTranslations = Collections.synchronizedSet(mutableSetOf<String>())
 
     fun processMotd(serverData: ServerData?) {
         if (serverData == null) return
-        val currentMotd = serverData.motd
+        val currentMotd = getMotdSafely(serverData) ?: return
         if (shouldSkipMotd(serverData, currentMotd)) return
 
         val original = resolveOriginalMotd(serverData, currentMotd)
@@ -33,21 +37,33 @@ object ServerMotdTranslationManager {
         requestAsyncTranslation(serverData, original, originalText)
     }
 
+    private fun getMotdSafely(serverData: ServerData): Component? {
+        return runCatching {
+            motdField?.get(serverData) as? Component
+        }.getOrNull() ?: runCatching {
+            serverData.motd
+        }.getOrNull()
+    }
+
     private fun shouldSkipMotd(serverData: ServerData, currentMotd: Component): Boolean {
         val config = TranslationService.getConfig()
         if (!config.enabled.value()) return true
 
-        val rawText = currentMotd.string.trim()
-        if (rawText.isBlank() || rawText.length < MIN_MOTD_LENGTH) return true
+        val rawText = com.stellar.lang.format.FormattingTagHelper.componentToFormattedText(currentMotd).trim()
+        val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(rawText)
+        if (clean.isBlank() || clean.length < MIN_MOTD_LENGTH) return true
 
         val cachedTranslated = translatedMotds[serverData]
         return cachedTranslated != null && currentMotd === cachedTranslated
     }
 
     private fun resolveOriginalMotd(serverData: ServerData, currentMotd: Component): Component {
-        val rawText = currentMotd.string.trim()
+        val rawText = com.stellar.lang.format.FormattingTagHelper.componentToFormattedText(currentMotd).trim()
         val previousOriginal = originalMotds[serverData]
-        if (previousOriginal == null || previousOriginal.string.trim() != rawText) {
+        val prevRaw = previousOriginal?.let {
+            com.stellar.lang.format.FormattingTagHelper.componentToFormattedText(it).trim()
+        }
+        if (previousOriginal == null || prevRaw != rawText) {
             originalMotds[serverData] = currentMotd
         }
         return originalMotds[serverData] ?: currentMotd
@@ -88,7 +104,10 @@ object ServerMotdTranslationManager {
 
     private fun buildMotdComponent(translatedText: String, original: Component): Component {
         val isHidden = TranslationBadgeHelper.isHidden()
-        val textComp = Component.literal(translatedText).setStyle(original.style)
+        val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(
+            translatedText,
+            original.style,
+        )
         if (isHidden) {
             return textComp
         }

@@ -30,9 +30,13 @@ object SignTranslationManager {
     }
 
     internal fun onTranslationSuccess(result: TranslationResult) {
-        if (result.isSameLanguage) return
         val targetLang = result.targetLanguage
         val textKey = buildTextKey(targetLang, result.originalText)
+        if (result.isSameLanguage) {
+            failedSignKeys.remove(textKey)
+            textOutcomeCache.remove(textKey)
+            return
+        }
         failedSignKeys.remove(textKey)
         if (!textOutcomeCache.containsKey(textKey)) {
             val dummySignText = SignText()
@@ -105,6 +109,9 @@ object SignTranslationManager {
             if (result != null && !result.isSameLanguage) {
                 textOutcomeCache[textKey] = applyTranslatedLinesWithOutcome(signText, result.translatedText)
                 failedSignKeys.remove(textKey)
+            } else if (result != null && result.isSameLanguage) {
+                failedSignKeys.remove(textKey)
+                textOutcomeCache.remove(textKey)
             } else if (result == null) {
                 failedSignKeys.add(textKey)
             }
@@ -274,7 +281,7 @@ object SignTranslationManager {
     fun extractSentence(signText: SignText): String {
         if (!hasTranslatableText(signText)) return ""
         return signText.getMessages(false)
-            .map { it.string.trim() }
+            .map { com.stellar.lang.format.FormattingTagHelper.componentToFormattedText(it).trim() }
             .filter { it.isNotEmpty() && !isPureFormattingLine(it) }
             .map { extractFraming(it).content }
             .filter { it.isNotEmpty() }

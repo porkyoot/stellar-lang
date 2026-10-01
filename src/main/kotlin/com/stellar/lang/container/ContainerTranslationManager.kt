@@ -157,9 +157,10 @@ object ContainerTranslationManager {
             StellarLangInputHandler.isShowingOriginal()
         if (disabled) return null
 
-        val text = original.string.trim()
-        val isBadgePrefix = text.startsWith("[T]") || text.startsWith("[...]")
-        return if (text.length < MIN_TRANSLATABLE_LENGTH || isBadgePrefix) null else text
+        val text = com.stellar.lang.format.FormattingTagHelper.componentToFormattedText(original).trim()
+        val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(text)
+        val isBadgePrefix = clean.startsWith("[T]") || clean.startsWith("[...]")
+        return if (clean.length < MIN_TRANSLATABLE_LENGTH || isBadgePrefix) null else text
     }
 
     @Suppress("ReturnCount", "CognitiveComplexMethod", "CyclomaticComplexMethod")
@@ -227,16 +228,19 @@ object ContainerTranslationManager {
 
     private fun createFormattedName(translatedText: String, style: Style = Style.EMPTY): MutableComponent {
         val badge = TranslationBadgeHelper.createBadge(failed = false, trailingSpace = true)
-        return Component.empty().append(badge).append(Component.literal(translatedText).withStyle(style))
+        val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(translatedText, style)
+        return Component.empty().append(badge).append(textComp)
     }
 
-    private fun createTranslatingName(originalText: String, style: Style = Style.EMPTY): MutableComponent {
+    private fun createTranslatingName(originalText: String, style: Style): MutableComponent {
         val badge = TranslationBadgeHelper.createTranslatingBadge(trailingSpace = true)
-        return Component.empty().append(badge).append(Component.literal(originalText).withStyle(style))
+        val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(originalText, style)
+        return Component.empty().append(badge).append(textComp)
     }
 
     private fun createFailedName(originalText: String, style: Style = Style.EMPTY): MutableComponent {
         val badge = TranslationBadgeHelper.createBadge(failed = true, trailingSpace = true)
-        return Component.empty().append(badge).append(Component.literal(originalText).withStyle(style))
+        val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(originalText, style)
+        return Component.empty().append(badge).append(textComp)
     }
 }

@@ -26,6 +26,7 @@ import java.util.Optional
 class EntityAndItemTranslationManagerSpec : FunSpec({
     lateinit var server: com.sun.net.httpserver.HttpServer
     var serverPort: Int = 0
+    var responseBody: String = """{"translatedText": "Translated Value", "detectedLanguage": "fr"}"""
 
     beforeSpec {
         SharedConstants.tryDetectVersion()
@@ -33,8 +34,7 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
         server = com.sun.net.httpserver.HttpServer.create(java.net.InetSocketAddress("127.0.0.1", 0), 0)
         serverPort = server.address.port
         server.createContext("/translate") { exchange ->
-            val body = """{"translatedText": "Translated Value", "detectedLanguage": "fr"}"""
-            val bytes = body.toByteArray()
+            val bytes = responseBody.toByteArray()
             exchange.sendResponseHeaders(200, bytes.size.toLong())
             exchange.responseBody.write(bytes)
             exchange.close()
@@ -47,6 +47,7 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
     }
 
     beforeEach {
+        responseBody = """{"translatedText": "Translated Value", "detectedLanguage": "fr"}"""
         com.stellar.lang.input.StellarLangInputHandler.clearProviders()
         TranslationService.clearCache()
         val config = TranslationService.getConfig()
@@ -554,5 +555,135 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
         // Empty / untranslatable entity returns false
         val emptyStand = createMockEntity(Component.literal(""))
         EntityTranslationManager.refreshEntity(emptyStand) shouldBe false
+    }
+
+    test("refreshEntity handles success, same language, and failure callbacks") {
+        EntityTranslationManager.clearCache()
+        val text = "Zombie Test Ent"
+        val armorStand = createMockEntity(Component.literal(text))
+        val targetLang = TranslationService.getTargetLanguage()
+        val key = com.stellar.lang.service.TranslationCache.cacheKey(text, targetLang)
+
+        // 1. Success
+        EntityTranslationManager.refreshEntity(armorStand) shouldBe true
+        val successRes = TranslationResult(text, "Zombie Traduit", "en", targetLang, false)
+        com.stellar.lang.service.TranslationCache.completeInFlight(key, successRes)
+
+        // 2. Same language
+        EntityTranslationManager.clearCache()
+        EntityTranslationManager.refreshEntity(armorStand) shouldBe true
+        val sameRes = TranslationResult(text, text, targetLang, targetLang, true)
+        com.stellar.lang.service.TranslationCache.completeInFlight(key, sameRes)
+
+        // 3. Failure
+        EntityTranslationManager.clearCache()
+        EntityTranslationManager.refreshEntity(armorStand) shouldBe true
+        com.stellar.lang.service.TranslationCache.completeInFlight(key, null)
+    }
+
+    test("refreshItem handles success, same language, and failure") {
+        ItemTranslationManager.clearCache()
+        val text = "Item Test"
+        val stack = createMockStack(Component.literal(text))
+        val targetLang = TranslationService.getTargetLanguage()
+        val key = com.stellar.lang.service.TranslationCache.cacheKey(text, targetLang)
+
+        // Success
+        ItemTranslationManager.refreshItem(stack) shouldBe true
+        val successRes = TranslationResult(text, "Objet Test", "en", targetLang, false)
+        com.stellar.lang.service.TranslationCache.completeInFlight(key, successRes)
+
+        // Same language
+        ItemTranslationManager.clearCache()
+        ItemTranslationManager.refreshItem(stack) shouldBe true
+        val sameRes = TranslationResult(text, text, targetLang, targetLang, true)
+        com.stellar.lang.service.TranslationCache.completeInFlight(key, sameRes)
+
+        // Failure
+        ItemTranslationManager.clearCache()
+        ItemTranslationManager.refreshItem(stack) shouldBe true
+        com.stellar.lang.service.TranslationCache.completeInFlight(key, null)
+
+        // Empty stack returns false
+        ItemTranslationManager.refreshItem(ItemStack.EMPTY) shouldBe false
+    }
+
+    test("resolveItemTranslation handles same language and failure callbacks") {
+        ItemTranslationManager.clearCache()
+        val text = "Objet Callback Test"
+        val itemComp = Component.literal(text)
+        val stack = createMockStack(itemComp)
+        val targetLang = TranslationService.getTargetLanguage()
+        val key = com.stellar.lang.service.TranslationCache.cacheKey(text, targetLang)
+
+        // 1. Initial call triggers async
+        ItemTranslationManager.translateItemName(stack, itemComp)
+
+        // Complete with same language
+        val sameResult = TranslationResult(text, text, targetLang, targetLang, true)
+        com.stellar.lang.service.TranslationCache.completeInFlight(key, sameResult)
+
+        // 2. Retry branch with failure
+        val cacheKey = "$targetLang::${text.hashCode()}"
+        ItemTranslationManager.failedItems.add(cacheKey)
+        ItemTranslationManager.lastItemRetryTimes[cacheKey] = 0L
+        TranslationService.markFailed(text)
+
+        ItemTranslationManager.translateItemName(stack, itemComp)
+        com.stellar.lang.service.TranslationCache.completeInFlight(key, null)
+
+        // 3. Retry branch with success
+        ItemTranslationManager.failedItems.add(cacheKey)
+        ItemTranslationManager.lastItemRetryTimes[cacheKey] = 0L
+        TranslationService.markFailed(text)
+        ItemTranslationManager.translateItemName(stack, itemComp)
+        val successResult = TranslationResult(text, "Objet Succes", "en", targetLang, false)
+        com.stellar.lang.service.TranslationCache.completeInFlight(key, successResult)
+
+        // 4. Retry branch with same language
+        ItemTranslationManager.failedItems.add(cacheKey)
+        ItemTranslationManager.lastItemRetryTimes[cacheKey] = 0L
+        TranslationService.markFailed(text)
+        ItemTranslationManager.translateItemName(stack, itemComp)
+        com.stellar.lang.service.TranslationCache.completeInFlight(key, sameResult)
+    }
+
+    test("resolveEntityTranslation handles same language and failure callbacks") {
+        EntityTranslationManager.clearCache()
+        val text = "Monstre Callback Test"
+        val comp = Component.literal(text)
+        val targetLang = TranslationService.getTargetLanguage()
+        val key = com.stellar.lang.service.TranslationCache.cacheKey(text, targetLang)
+
+        // 1. Initial call triggers async
+        EntityTranslationManager.translateEntityName(null, comp)
+
+        // Complete with same language
+        val sameResult = TranslationResult(text, text, targetLang, targetLang, true)
+        com.stellar.lang.service.TranslationCache.completeInFlight(key, sameResult)
+
+        // 2. Retry branch with failure
+        val textKey = "$targetLang::$text"
+        EntityTranslationManager.failedEntities.add(textKey)
+        EntityTranslationManager.lastEntityRetryTimes[textKey] = 0L
+        TranslationService.markFailed(text)
+
+        EntityTranslationManager.translateEntityName(null, comp)
+        com.stellar.lang.service.TranslationCache.completeInFlight(key, null)
+
+        // 3. Retry branch with success
+        EntityTranslationManager.failedEntities.add(textKey)
+        EntityTranslationManager.lastEntityRetryTimes[textKey] = 0L
+        TranslationService.markFailed(text)
+        EntityTranslationManager.translateEntityName(null, comp)
+        val successResult = TranslationResult(text, "Monstre Succes", "en", targetLang, false)
+        com.stellar.lang.service.TranslationCache.completeInFlight(key, successResult)
+
+        // 4. Retry branch with same language
+        EntityTranslationManager.failedEntities.add(textKey)
+        EntityTranslationManager.lastEntityRetryTimes[textKey] = 0L
+        TranslationService.markFailed(text)
+        EntityTranslationManager.translateEntityName(null, comp)
+        com.stellar.lang.service.TranslationCache.completeInFlight(key, sameResult)
     }
 })

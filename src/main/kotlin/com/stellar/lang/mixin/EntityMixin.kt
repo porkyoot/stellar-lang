@@ -18,6 +18,11 @@ abstract class EntityMixin {
     @Inject(method = ["setCustomName"], at = [At("TAIL")])
     private fun stellarOnSetCustomName(name: Component?, ci: CallbackInfo) {
         if (name != null) {
+            val self = this as Any as? Entity
+            val config = com.stellar.lang.service.TranslationService.getConfig()
+            if (!config.translatePlayerNames.value() && com.stellar.lang.player.PlayerNameHelper.isPlayer(self, name)) {
+                return
+            }
             EntityTranslationManager.onEntityNameChanged(name)
         }
     }
@@ -27,6 +32,10 @@ abstract class EntityMixin {
         val self = this as Any as? Entity ?: return
         val name = self.customName
         if (name != null) {
+            val config = com.stellar.lang.service.TranslationService.getConfig()
+            if (!config.translatePlayerNames.value() && com.stellar.lang.player.PlayerNameHelper.isPlayer(self, name)) {
+                return
+            }
             EntityTranslationManager.onEntityNameChanged(name)
         }
     }

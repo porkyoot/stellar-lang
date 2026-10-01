@@ -179,4 +179,13 @@ class TargetManagerSpec : FunSpec({
         TargetManager.isTargeted(pos) shouldBe true
         TargetManager.isTargeted(BlockPos(0, 0, 0)) shouldBe false
     }
+
+    test("getTargetedBlockHit handles miss hitResult and null client") {
+        val mockMc = unsafe.allocateInstance(Minecraft::class.java) as Minecraft
+        mockMc.hitResult = BlockHitResult.miss(Vec3.ZERO, Direction.UP, BlockPos.ZERO)
+        TargetManager.getTargetedBlockHit(mockMc) shouldBe null
+
+        TargetManager.getTargetedBlockHit(null) shouldBe null
+        TargetManager.getTargetedEntity(null) shouldBe null
+    }
 })

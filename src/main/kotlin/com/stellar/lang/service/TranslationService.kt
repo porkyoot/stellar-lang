@@ -134,7 +134,28 @@ object TranslationService {
     }
 
     fun getCached(text: String, targetLang: String): TranslationResult? {
-        return TranslationCache.get(text, targetLang)
+        val exact = TranslationCache.get(text, targetLang)
+        if (exact != null) return exact
+
+        val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(text).trim()
+        if (clean != text.trim()) {
+            val fromClean = TranslationCache.get(clean, targetLang)
+            if (fromClean != null) {
+                val formattedTrans = if (!fromClean.translatedText.contains('§') && text.contains('§')) {
+                    val leading = extractLeadingFormatting(text)
+                    "$leading${fromClean.translatedText}"
+                } else {
+                    fromClean.translatedText
+                }
+                return fromClean.copy(originalText = text, translatedText = formattedTrans)
+            }
+        }
+        return null
+    }
+
+    private fun extractLeadingFormatting(text: String): String {
+        val matcher = com.stellar.lang.format.FormattingTagHelper.FORMATTING_CODE_PATTERN.matcher(text)
+        return if (matcher.find() && matcher.start() == 0) matcher.group(1) else ""
     }
 
     fun putCache(result: TranslationResult) {
@@ -146,11 +167,23 @@ object TranslationService {
         val key = TranslationCache.cacheKey(trimmed, targetLang)
         TranslationCache.evict(trimmed, targetLang)
         failedRequests.remove(key)
+        val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(trimmed).trim()
+        if (clean != trimmed) {
+            val cleanKey = TranslationCache.cacheKey(clean, targetLang)
+            TranslationCache.evict(clean, targetLang)
+            failedRequests.remove(cleanKey)
+        }
     }
 
     fun isInFlight(text: String, targetLang: String = getTargetLanguage()): Boolean {
         val key = TranslationCache.cacheKey(text.trim(), targetLang)
-        return TranslationCache.isInFlight(key)
+        if (TranslationCache.isInFlight(key)) return true
+        val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(text).trim()
+        if (clean != text.trim()) {
+            val cleanKey = TranslationCache.cacheKey(clean, targetLang)
+            return TranslationCache.isInFlight(cleanKey)
+        }
+        return false
     }
 
     @JvmOverloads
@@ -291,8 +324,8 @@ object TranslationService {
     ): Boolean {
         if (translatedText == null) return true
         if (isSameLanguage(detectedLang, targetLang)) return false
-        val origTrimmed = originalText.trim()
-        val transTrimmed = translatedText.trim()
+        val origTrimmed = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(originalText).trim()
+        val transTrimmed = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(translatedText).trim()
         if (origTrimmed.none { it.isLetter() }) return false
         return origTrimmed.equals(transTrimmed, ignoreCase = true)
     }
@@ -306,13 +339,25 @@ object TranslationService {
         if (translatedTexts == null || translatedTexts.size != originalTexts.size) return true
         if (isSameLanguage(detectedLang, targetLang)) return false
 
-        val translatableIndices = originalTexts.indices.filter { originalTexts[it].any { ch -> ch.isLetter() } }
+        val cleanOriginals = originalTexts.map {
+            com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(it).trim()
+        }
+        val cleanTranslated = translatedTexts.map {
+            com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(it).trim()
+        }
+        val translatableIndices = cleanOriginals.indices.filter { cleanOriginals[it].any { ch -> ch.isLetter() } }
         if (translatableIndices.isEmpty()) return false
 
         val failedCount = translatableIndices.count { idx ->
-            originalTexts[idx].trim().equals(translatedTexts[idx].trim(), ignoreCase = true)
+            cleanOriginals[idx].equals(cleanTranslated[idx], ignoreCase = true)
         }
         return failedCount == translatableIndices.size
+    }
+
+    private fun isCircuitBrokenRemote(candidate: com.stellar.lang.plugin.TranslationPlugin): Boolean {
+        val isRemote = candidate is LibreTranslatePlugin ||
+            candidate is com.stellar.lang.plugin.deepl.DeepLPlugin
+        return isRemote && TranslationCache.isCircuitBreakerOpen()
     }
 
     fun getCandidateTranslators(
@@ -321,26 +366,39 @@ object TranslationService {
         val active = PluginRegistry.getActiveTranslator()
         val fallback = PluginRegistry.getFallbackTranslator(active)
         return listOfNotNull(active, fallback).distinctBy { it.id }.filter { candidate ->
-            if (candidate === active) {
+            if (isCircuitBrokenRemote(candidate)) {
+                false
+            } else if (candidate === active) {
                 true
             } else if (candidate is com.stellar.lang.plugin.onnx.OnnxTranslationPlugin) {
                 com.stellar.lang.plugin.onnx.OnnxModelManager.isTranslationModelReady(targetLang)
             } else if (candidate is LibreTranslatePlugin) {
                 val host = getConfig().apiHost.value().trim()
-                host.isNotBlank() && !TranslationCache.isCircuitBreakerOpen()
+                host.isNotBlank()
+            } else if (candidate is com.stellar.lang.plugin.deepl.DeepLPlugin) {
+                val key = getConfig().deeplApiKey.value().trim()
+                key.isNotBlank()
             } else {
                 true
             }
         }
     }
 
-    private fun detectLanguage(text: String): String {
-        val quick = com.stellar.lang.plugin.LanguageDetectionHelper.detectQuick(text)
+    internal fun detectLanguage(text: String): String {
+        val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(text)
+        val quick = com.stellar.lang.plugin.LanguageDetectionHelper.detectQuick(clean)
         if (quick != null) return quick
 
-        val detector = PluginRegistry.getActiveDetector()
+        val activeDetector = PluginRegistry.getActiveDetector()
+        val isRemoteDetector = activeDetector is LibreTranslatePlugin ||
+            activeDetector is com.stellar.lang.plugin.deepl.DeepLPlugin
+        val detector = if (isRemoteDetector && TranslationCache.isCircuitBreakerOpen()) {
+            PluginRegistry.getFallbackDetector(activeDetector) ?: activeDetector
+        } else {
+            activeDetector
+        }
         return kotlinx.coroutines.runBlocking {
-            val detected = detector.detectLanguage(text)
+            val detected = detector.detectLanguage(clean)
             if (!detected.isNullOrBlank() && detected != UNKNOWN_LANG &&
                 detected in com.stellar.lang.plugin.LanguageDetectionHelper.SUPPORTED_LANGUAGES
             ) {
@@ -353,7 +411,7 @@ object TranslationService {
                     ) {
                         null
                     } else {
-                        val fbDetected = fallback?.detectLanguage(text)
+                        val fbDetected = fallback?.detectLanguage(clean)
                         if (!fbDetected.isNullOrBlank() && fbDetected != UNKNOWN_LANG &&
                             fbDetected in com.stellar.lang.plugin.LanguageDetectionHelper.SUPPORTED_LANGUAGES
                         ) {
@@ -374,7 +432,8 @@ object TranslationService {
     ): TranslationResult? {
         val trimmed = text.trim()
         if (trimmed.isEmpty()) return null
-        if (trimmed.none { it.isLetter() }) {
+        val cleanForCheck = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(trimmed)
+        if (cleanForCheck.none { it.isLetter() }) {
             return TranslationResult(
                 originalText = text,
                 translatedText = text,
@@ -383,6 +442,10 @@ object TranslationService {
                 isSameLanguage = true,
             )
         }
+
+        val textToTranslate = com.stellar.lang.player.PlayerNameHelper.protectPlayerNames(
+            com.stellar.lang.format.FormattingTagHelper.encodeToUntranslatableTags(trimmed),
+        )
 
         return runCatching {
             lastNetworkException = null
@@ -395,10 +458,12 @@ object TranslationService {
                 for (attempt in 1..MAX_ATTEMPTS_PER_PROVIDER) {
                     val outcome = runCatching {
                         if (candidate is LibreTranslatePlugin) {
-                            executeTranslationWithProvider(candidate, trimmed, detected, targetLang)
+                            executeTranslationWithProvider(candidate, textToTranslate, detected, targetLang)
+                        } else if (candidate is com.stellar.lang.plugin.deepl.DeepLPlugin) {
+                            executeTranslationWithProvider(candidate, textToTranslate, detected, targetLang)
                         } else {
                             if (detected == UNKNOWN_LANG) {
-                                detected = detectLanguage(trimmed)
+                                detected = detectLanguage(textToTranslate)
                             }
                             if (isSameLanguage(detected, targetLang)) {
                                 TranslationResult(
@@ -409,7 +474,7 @@ object TranslationService {
                                     isSameLanguage = true,
                                 )
                             } else {
-                                executeTranslationWithProvider(candidate, trimmed, detected, targetLang)
+                                executeTranslationWithProvider(candidate, textToTranslate, detected, targetLang)
                             }
                         }
                     }.onFailure { ex ->
@@ -427,11 +492,16 @@ object TranslationService {
                     }.getOrNull()
 
                     if (outcome != null) {
-                        finalResult = outcome
+                        val decoded = com.stellar.lang.format.FormattingTagHelper.decodeFromUntranslatableTags(
+                            outcome.translatedText,
+                        )
+                        finalResult = outcome.copy(originalText = text, translatedText = decoded)
                         break
                     }
 
-                    if (fatalException || isNonRetryableException(lastNetworkException)) {
+                    if (fatalException || isNonRetryableException(lastNetworkException) ||
+                        isCircuitBrokenRemote(candidate)
+                    ) {
                         break
                     }
 
@@ -471,6 +541,7 @@ object TranslationService {
         }.getOrNull()
     }
 
+    @Suppress("ReturnCount")
     private fun executeTranslationWithProvider(
         provider: com.stellar.lang.plugin.TranslationPlugin,
         text: String,
@@ -481,6 +552,33 @@ object TranslationService {
         if (provider is LibreTranslatePlugin) {
             val res = executeTranslation(text, config.apiHost.value(), config.apiKey.value(), targetLang)
             return if (res != null && !isUntranslatedFailure(res)) res else null
+        }
+        if (provider is com.stellar.lang.plugin.deepl.DeepLPlugin) {
+            val host = config.deeplApiHost.value()
+            val apiKey = config.deeplApiKey.value().trim()
+            val formality = config.deeplFormality.value()
+            val detailed = provider.executeBatchTranslateDetailed(
+                listOf(text),
+                detectedLang.takeIf { it != UNKNOWN_LANG },
+                targetLang,
+                host,
+                apiKey,
+                formality,
+            )?.firstOrNull() ?: return null
+
+            val effectiveDetected = detailed.detectedSourceLanguage ?: detectedLang.takeIf { it != UNKNOWN_LANG }
+            val isSame = isSameLanguage(effectiveDetected, targetLang)
+            return if (!isUntranslatedFailure(text, detailed.translatedText, effectiveDetected, targetLang)) {
+                TranslationResult(
+                    originalText = text,
+                    translatedText = detailed.translatedText,
+                    detectedLanguage = effectiveDetected ?: UNKNOWN_LANG,
+                    targetLanguage = targetLang,
+                    isSameLanguage = isSame,
+                )
+            } else {
+                null
+            }
         }
 
         return kotlinx.coroutines.runBlocking {
@@ -516,7 +614,8 @@ object TranslationService {
     ): List<TranslationResult>? {
         if (texts.isEmpty()) return emptyList()
 
-        if (texts.all { it.none { ch -> ch.isLetter() } }) {
+        val cleanList = texts.map { com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(it) }
+        if (cleanList.all { it.none { ch -> ch.isLetter() } }) {
             return texts.map {
                 TranslationResult(
                     originalText = it,
@@ -526,6 +625,12 @@ object TranslationService {
                     isSameLanguage = true,
                 )
             }
+        }
+
+        val encodedTexts = texts.map {
+            com.stellar.lang.player.PlayerNameHelper.protectPlayerNames(
+                com.stellar.lang.format.FormattingTagHelper.encodeToUntranslatableTags(it),
+            )
         }
 
         return runCatching {
@@ -539,10 +644,13 @@ object TranslationService {
                 for (attempt in 1..MAX_ATTEMPTS_PER_PROVIDER) {
                     val results = runCatching {
                         if (candidate is LibreTranslatePlugin) {
-                            executeBatchTranslationWithProvider(candidate, texts, detected, targetLang)
+                            executeBatchTranslationWithProvider(candidate, encodedTexts, detected, targetLang)
+                        } else if (candidate is com.stellar.lang.plugin.deepl.DeepLPlugin) {
+                            executeBatchTranslationWithProvider(candidate, encodedTexts, detected, targetLang)
                         } else {
                             if (detected == UNKNOWN_LANG) {
-                                val sampleText = texts.firstOrNull { it.any { ch -> ch.isLetter() } } ?: texts.first()
+                                val sampleText = encodedTexts.firstOrNull { it.any { ch -> ch.isLetter() } }
+                                    ?: encodedTexts.first()
                                 detected = detectLanguage(sampleText)
                             }
                             if (isSameLanguage(detected, targetLang)) {
@@ -556,7 +664,7 @@ object TranslationService {
                                     )
                                 }
                             } else {
-                                executeBatchTranslationWithProvider(candidate, texts, detected, targetLang)
+                                executeBatchTranslationWithProvider(candidate, encodedTexts, detected, targetLang)
                             }
                         }
                     }.onFailure { ex ->
@@ -573,11 +681,21 @@ object TranslationService {
                     }.getOrNull()
 
                     if (results != null) {
-                        finalResults = results
+                        finalResults = results.mapIndexed { idx, res ->
+                            val decoded = com.stellar.lang.format.FormattingTagHelper.decodeFromUntranslatableTags(
+                                res.translatedText,
+                            )
+                            res.copy(
+                                originalText = texts.getOrElse(idx) { res.originalText },
+                                translatedText = decoded,
+                            )
+                        }
                         break
                     }
 
-                    if (fatalException || isNonRetryableException(lastNetworkException)) {
+                    if (fatalException || isNonRetryableException(lastNetworkException) ||
+                        isCircuitBrokenRemote(candidate)
+                    ) {
                         break
                     }
 
@@ -630,6 +748,7 @@ object TranslationService {
         }.getOrNull()
     }
 
+    @Suppress("ReturnCount")
     private fun executeBatchTranslationWithProvider(
         provider: com.stellar.lang.plugin.TranslationPlugin,
         texts: List<String>,
@@ -643,6 +762,34 @@ object TranslationService {
             val isFailure = results == null ||
                 isBatchUntranslatedFailure(texts, results.map { it.translatedText }, effectiveDetected, targetLang)
             return if (isFailure) null else results
+        }
+        if (provider is com.stellar.lang.plugin.deepl.DeepLPlugin) {
+            val host = config.deeplApiHost.value()
+            val apiKey = config.deeplApiKey.value().trim()
+            val formality = config.deeplFormality.value()
+            val detailedList = provider.executeBatchTranslateDetailed(
+                texts,
+                detectedLang.takeIf { it != UNKNOWN_LANG },
+                targetLang,
+                host,
+                apiKey,
+                formality,
+            ) ?: return null
+
+            return texts.mapIndexed { index, original ->
+                val detailed = detailedList.getOrElse(index) {
+                    com.stellar.lang.plugin.deepl.DeepLPlugin.DeepLTranslationResult(original, null)
+                }
+                val effectiveDetected = detailed.detectedSourceLanguage ?: detectedLang.takeIf { it != UNKNOWN_LANG }
+                val isSame = isSameLanguage(effectiveDetected, targetLang)
+                TranslationResult(
+                    originalText = original,
+                    translatedText = detailed.translatedText,
+                    detectedLanguage = effectiveDetected ?: UNKNOWN_LANG,
+                    targetLanguage = targetLang,
+                    isSameLanguage = isSame,
+                )
+            }
         }
 
         return kotlinx.coroutines.runBlocking {
@@ -901,7 +1048,13 @@ object TranslationService {
 
     fun isFailed(text: String, targetLang: String): Boolean {
         val key = cacheKey(text, targetLang)
-        return TranslationCache.isFailed(key) || TranslationCache.isCircuitBreakerOpen()
+        if (TranslationCache.isFailed(key) || TranslationCache.isCircuitBreakerOpen()) return true
+        val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(text).trim()
+        if (clean != text.trim()) {
+            val cleanKey = cacheKey(clean, targetLang)
+            return TranslationCache.isFailed(cleanKey)
+        }
+        return false
     }
 
     fun markFailed(text: String, targetLang: String = getTargetLanguage()) {
@@ -1043,6 +1196,19 @@ object TranslationService {
                 results.joinToString("; ")
             }
             callback(outcome)
+        }
+    }
+
+    fun testDeepl(
+        apiKey: String,
+        host: String = "auto",
+        targetLang: String = getTargetLanguage(),
+        callback: (Result<String>) -> Unit,
+    ) {
+        executor.execute {
+            val plugin = com.stellar.lang.plugin.deepl.DeepLPlugin(httpClient)
+            val result = plugin.testConnection(apiKey, host, targetLang)
+            callback(result)
         }
     }
 }

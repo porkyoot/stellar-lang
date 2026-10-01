@@ -12,10 +12,10 @@ class StellarLangConfig : ReflectiveConfig() {
     @Comment("Master switch to enable or disable all Stellar Lang translations")
     val enabled: TrackedValue<Boolean> = value(true)
 
-    @Comment("Active translation provider plugin (e.g. onnx, libretranslate)")
+    @Comment("Active translation provider plugin (e.g. onnx, libretranslate, deepl)")
     val translationPlugin: TrackedValue<String> = value("onnx")
 
-    @Comment("Active language detection provider plugin (e.g. onnx, libretranslate)")
+    @Comment("Active language detection provider plugin (e.g. onnx, libretranslate, deepl)")
     val detectionPlugin: TrackedValue<String> = value("onnx")
 
     @Comment("Local directory for storing downloaded ONNX models")
@@ -33,11 +33,23 @@ class StellarLangConfig : ReflectiveConfig() {
     @Comment("API key for LibreTranslate (optional for public/local instances without auth)")
     val apiKey: TrackedValue<String> = value("")
 
+    @Comment("DeepL API authentication key (Free or Pro)")
+    val deeplApiKey: TrackedValue<String> = value("")
+
+    @Comment("DeepL API endpoint host (default: 'auto' which resolves based on API key tier, or custom URL)")
+    val deeplApiHost: TrackedValue<String> = value("auto")
+
+    @Comment("DeepL translation formality preference (default, more, less, prefer_more, prefer_less)")
+    val deeplFormality: TrackedValue<String> = value("default")
+
     @Comment("Target language code (e.g. auto, en, es, fr, de, ja, zh). 'auto' infers from game setting.")
     val targetLanguage: TrackedValue<String> = value("auto")
 
     @Comment("Enable translation of in-game chat messages")
     val translateChat: TrackedValue<Boolean> = value(true)
+
+    @Comment("Enable translation of player names across chat and entity nametags")
+    val translatePlayerNames: TrackedValue<Boolean> = value(false)
 
     @Comment("Enable translation of signs")
     val translateSigns: TrackedValue<Boolean> = value(true)

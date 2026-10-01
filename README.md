@@ -4,7 +4,7 @@
 
 # 🌐 Stellar Lang
 
-**Real-time client-side translation mod for chat, signs, books, entities, and items with area context and LibreTranslate integration.**
+**Real-time client-side translation mod for chat, signs, books, entities, and items with area context, ONNX offline inference, DeepL API, and LibreTranslate integration.**
 
 [![Minecraft](https://img.shields.io/badge/Minecraft-26.2-blue.svg)](https://www.minecraft.net/)
 [![Loader](https://img.shields.io/badge/Loader-Quilt-purple.svg)](https://quiltmc.org/)
@@ -21,7 +21,7 @@
 
 **Stellar Lang** is the dedicated real-time client-side translation module of the Stellar mod suite. It dynamically translates internationalized gameplay elements—including chat messages, signs, written books, entity nametags, and item tooltips—into the player's configured language.
 
-Powered by **LibreTranslate**, Stellar Lang leverages contextual translation: nearby signs are translated together as a continuous message area, and written books are translated across page breaks to preserve full narrative context.
+Supporting **ONNX Runtime (Local Offline)**, **DeepL (Official API)**, and **LibreTranslate (HTTP API)**, Stellar Lang leverages contextual translation: nearby signs are translated together as a continuous message area, and written books are translated across page breaks to preserve full narrative context.
 
 ---
 
@@ -113,6 +113,26 @@ curl http://localhost:5000/languages
 
 ---
 
+## 🌍 DeepL API Integration (Free & Pro)
+
+Stellar Lang includes dedicated support for translation and language detection via the official **DeepL API**:
+
+### Features
+* **Free & Pro Auto-Detection:** Automatically routes to `https://api-free.deepl.com` for Free keys (keys ending in `:fx`) or `https://api.deepl.com` for Pro keys, with support for custom endpoints/proxies.
+* **Batch Request Coalescing:** Chunks and coalesces multi-sign and batch requests into optimal 50-item batches.
+* **Formality Preference:** Configurable tone (`default`, `more`, `less`, `prefer_more`, `prefer_less`) for supported European target languages.
+* **Smart Language Normalization:** Automatically adapts language codes (e.g. `en` -> `EN-US`, `pt` -> `PT-PT`, `zh` -> `ZH-HANS`).
+* **Built-in Circuit Breaker:** Gracefully trips on rate-limiting (HTTP 429) or monthly character quota exhaustion (HTTP 456).
+
+### Configure DeepL in Minecraft
+1. Open **Mod Menu** -> **Stellar Lang** -> **Providers & Models**.
+2. Set **Translation Provider** (and optionally **Language Detection Provider**) to **DeepL (Official API)**.
+3. In **DeepL (Official API) Settings**, enter your **DeepL API Key**.
+4. Click **Test DeepL Connection** to verify connectivity.
+5. Click **Save and Exit**.
+
+---
+
 ## 🧪 Testing & Verification
 
 Always use the Gradle wrapper (`./gradlew`) rather than system `gradle`:
@@ -125,6 +145,7 @@ Always use the Gradle wrapper (`./gradlew`) rather than system `gradle`:
   - [`StellarLangSpec.kt`](src/test/kotlin/com/stellar/lang/StellarLangSpec.kt)
   - [`StellarLangConfigSpec.kt`](src/test/kotlin/com/stellar/lang/config/StellarLangConfigSpec.kt)
   - [`LangClothConfigScreenSpec.kt`](src/test/kotlin/com/stellar/lang/config/LangClothConfigScreenSpec.kt)
+  - [`DeepLPluginSpec.kt`](src/test/kotlin/com/stellar/lang/plugin/deepl/DeepLPluginSpec.kt)
   - [`TranslationServiceSpec.kt`](src/test/kotlin/com/stellar/lang/service/TranslationServiceSpec.kt)
   - [`TranslationCacheSpec.kt`](src/test/kotlin/com/stellar/lang/service/TranslationCacheSpec.kt)
   - [`ChatTranslationManagerSpec.kt`](src/test/kotlin/com/stellar/lang/chat/ChatTranslationManagerSpec.kt)

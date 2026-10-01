@@ -45,6 +45,9 @@ class LangClothConfigScreenSpec : FunSpec({
         config.translateChat.setValue(false, false)
         config.translateChat.value() shouldBe false
 
+        config.translatePlayerNames.setValue(true, false)
+        config.translatePlayerNames.value() shouldBe true
+
         config.translateSigns.setValue(false, false)
         config.translateSigns.value() shouldBe false
 

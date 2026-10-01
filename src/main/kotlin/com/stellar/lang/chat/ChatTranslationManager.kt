@@ -44,7 +44,7 @@ object ChatTranslationManager {
     private const val MIN_TRANSLATABLE_LENGTH = 2
     private const val TOGGLE_HOVER_TEXT = "Click to toggle original/translated text"
     private val idGenerator = AtomicLong(1000L)
-    private val trackedMessages = ConcurrentHashMap<Long, TrackedChatMessage>()
+    internal val trackedMessages = ConcurrentHashMap<Long, TrackedChatMessage>()
 
     private val defaultTimeoutExecutor: ScheduledExecutorService =
         Executors.newSingleThreadScheduledExecutor { runnable ->
@@ -116,7 +116,16 @@ object ChatTranslationManager {
     }
 
     internal fun onTranslationSuccess(result: TranslationResult) {
-        if (result.isSameLanguage) return
+        if (result.isSameLanguage) {
+            for (tracked in trackedMessages.values) {
+                if (tracked.messageText == result.originalText && tracked.isPending) {
+                    tracked.isPending = false
+                    tracked.translatedComponent = null
+                    scheduleChatRefresh(tracked)
+                }
+            }
+            return
+        }
         for (tracked in trackedMessages.values) {
             if (tracked.messageText == result.originalText) {
                 tracked.isPending = false
@@ -154,21 +163,57 @@ object ChatTranslationManager {
     }
 
     fun extractChatPayload(component: Component): ParsedChatPayload {
-        val fullText = component.string
+        val config = TranslationService.getConfig()
+        val flatList = component.toFlatList()
+        val fullText = flatList.joinToString("") { it.string }
         val matcher = CHAT_PREFIX_REGEX.matcher(fullText)
-        if (!matcher.find() || matcher.start() != 0) {
-            return ParsedChatPayload(null, fullText.trim())
+        val shouldExtractPrefix = !config.translatePlayerNames.value()
+        val hasPrefix = shouldExtractPrefix && matcher.find() && matcher.start() == 0
+        if (!hasPrefix) {
+            val formatted = com.stellar.lang.format.FormattingTagHelper.componentToFormattedText(component).trim()
+            return ParsedChatPayload(null, formatted.ifEmpty { fullText.trim() })
         }
 
         val prefixText = matcher.group(1)
         val prefixLength = prefixText.length
-        val messageText = fullText.substring(prefixLength).trim()
-        if (messageText.isBlank()) {
+        val prefixComp = buildPrefixComponent(flatList, prefixLength)
+        val messageComp = buildRemainingComponent(flatList, prefixLength)
+        val messageText = if (messageComp != null) {
+            com.stellar.lang.format.FormattingTagHelper.componentToFormattedText(messageComp).trim()
+        } else {
+            fullText.substring(prefixLength).trim()
+        }
+
+        if (com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(messageText).isBlank()) {
             return ParsedChatPayload(null, fullText.trim())
         }
 
-        val prefixComp = buildPrefixComponent(component.toFlatList(), prefixLength)
         return ParsedChatPayload(prefixComp, messageText)
+    }
+
+    private fun buildRemainingComponent(flatList: List<Component>, prefixLength: Int): Component? {
+        val result = Component.empty()
+        var currentLen = 0
+
+        for (comp in flatList) {
+            val str = comp.string
+            val compLen = str.length
+            if (currentLen + compLen <= prefixLength) {
+                currentLen += compLen
+                continue
+            }
+
+            if (currentLen < prefixLength) {
+                val skip = prefixLength - currentLen
+                val remainingText = str.substring(skip)
+                result.append(Component.literal(remainingText).setStyle(comp.style))
+                currentLen += compLen
+            } else {
+                result.append(comp)
+            }
+        }
+
+        return if (result.siblings.isEmpty() && result.string.isEmpty()) null else result
     }
 
     private fun buildPrefixComponent(flatList: List<Component>, prefixLength: Int): Component? {
@@ -209,6 +254,7 @@ object ChatTranslationManager {
         return Component.literal(slicedText).setStyle(comp.style)
     }
 
+    @Suppress("ReturnCount")
     fun processIncomingMessage(
         component: Component,
         source: GuiMessageSource? = null,
@@ -224,7 +270,30 @@ object ChatTranslationManager {
             return component
         }
 
-        return resolveAndTranslate(component, payload, TranslationService.getTargetLanguage())
+        val targetLang = TranslationService.getTargetLanguage()
+        val cached = TranslationService.getCached(payload.messageText, targetLang)
+        if (cached != null) {
+            if (cached.isSameLanguage) {
+                return component
+            }
+            return resolveAndTranslate(component, payload, targetLang)
+        }
+
+        val quickLang = com.stellar.lang.plugin.LanguageDetectionHelper.detectQuick(payload.messageText)
+        if (quickLang != null && TranslationService.isSameLanguage(quickLang, targetLang)) {
+            TranslationService.putCache(
+                TranslationResult(
+                    originalText = payload.messageText,
+                    translatedText = payload.messageText,
+                    detectedLanguage = quickLang,
+                    targetLanguage = targetLang,
+                    isSameLanguage = true,
+                ),
+            )
+            return component
+        }
+
+        return resolveAndTranslate(component, payload, targetLang)
     }
 
     @Suppress("ReturnCount")
@@ -245,26 +314,25 @@ object ChatTranslationManager {
         trackedMessages[id] = tracked
 
         val cached = TranslationService.getCached(payload.messageText, targetLang)
-        if (cached != null && !cached.isSameLanguage) {
+        if (cached != null) {
+            if (cached.isSameLanguage) {
+                return component
+            }
             val translated = createTranslatedComponent(id, cached, payload.prefixComponent)
             tracked.translatedComponent = translated
             return translated
         }
 
-        if (cached == null && TranslationService.isFailed(payload.messageText, targetLang)) {
+        if (TranslationService.isFailed(payload.messageText, targetLang)) {
             val failed = createFailedComponent(id, payload.messageText, payload.prefixComponent)
             tracked.translatedComponent = failed
             return failed
         }
 
-        if (cached == null) {
-            val translating = createTranslatingComponent(id, payload.messageText, payload.prefixComponent)
-            tracked.translatedComponent = translating
-            triggerBackgroundChatTranslation(tracked, payload.messageText)
-            return translating
-        }
-
-        return component
+        val translating = createTranslatingComponent(id, payload.messageText, payload.prefixComponent)
+        tracked.translatedComponent = translating
+        triggerBackgroundChatTranslation(tracked, payload.messageText)
+        return translating
     }
 
     @JvmOverloads
@@ -428,13 +496,12 @@ object ChatTranslationManager {
         if (prefixComponent != null) {
             root.append(prefixComponent)
         }
-        val textComp = if (isHidden) {
-            Component.literal(content).withStyle { style ->
+        val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(content)
+        if (isHidden) {
+            textComp.withStyle { style ->
                 style.withHoverEvent(HoverEvent.ShowText(Component.literal(hoverText)))
                     .withClickEvent(ClickEvent.RunCommand(buildToggleCommand(id)))
             }
-        } else {
-            Component.literal(content)
         }
         root.append(textComp)
         return root
@@ -445,6 +512,15 @@ object ChatTranslationManager {
         result: TranslationResult,
         prefixComponent: Component? = null,
     ): MutableComponent {
+        if (result.isSameLanguage) {
+            val root = Component.empty()
+            if (prefixComponent != null) {
+                root.append(prefixComponent)
+            }
+            val contentComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(result.originalText)
+            root.append(contentComp)
+            return root
+        }
         val hoverText = "Translated: [${result.detectedLanguage} -> ${result.targetLanguage}]\n" +
             "Original: ${result.originalText}\n$TOGGLE_HOVER_TEXT"
         return buildChatComponent(
@@ -627,5 +703,6 @@ object ChatTranslationManager {
 
     fun clearCache() {
         trackedMessages.clear()
+        com.stellar.lang.player.PlayerNameHelper.clearProviders()
     }
 }

@@ -30,6 +30,13 @@ class TranslationServiceSpec : FunSpec({
             exchange.responseBody.write(bytes)
             exchange.close()
         }
+        server.createContext("/v2/translate") { exchange ->
+            requestCount.incrementAndGet()
+            val bytes = responseBody.toByteArray()
+            exchange.sendResponseHeaders(responseCode.get(), bytes.size.toLong())
+            exchange.responseBody.write(bytes)
+            exchange.close()
+        }
         server.start()
     }
 
@@ -516,6 +523,52 @@ class TranslationServiceSpec : FunSpec({
         }
         latch.await(5, TimeUnit.SECONDS) shouldBe true
         outcome?.isFailure shouldBe true
+    }
+
+    test("testDeepl reports success and failure properly") {
+        responseCode.set(200)
+        responseBody = """{"translations":[{"detected_source_language":"EN","text":"Hallo"}]}"""
+        val latch = CountDownLatch(1)
+        var outcome: Result<String>? = null
+        TranslationService.testDeepl("test_key", "http://127.0.0.1:$serverPort", "de") { res ->
+            outcome = res
+            latch.countDown()
+        }
+        latch.await(5, TimeUnit.SECONDS) shouldBe true
+        outcome?.isSuccess shouldBe true
+        outcome?.getOrNull() shouldBe "Hallo"
+
+        val latchFail = CountDownLatch(1)
+        var failOutcome: Result<String>? = null
+        TranslationService.testDeepl("", "http://127.0.0.1:$serverPort", "de") { res ->
+            failOutcome = res
+            latchFail.countDown()
+        }
+        latchFail.await(5, TimeUnit.SECONDS) shouldBe true
+        failOutcome?.isFailure shouldBe true
+    }
+
+    test("getCandidateTranslators filters DeepL candidate based on key and status") {
+        val config = TranslationService.getConfig()
+        val origTrans = config.translationPlugin.value()
+        val origKey = config.deeplApiKey.value()
+        try {
+            val deeplCandidate = com.stellar.lang.plugin.PluginRegistry.getTranslator("deepl")!!
+            config.translationPlugin.setValue("onnx", false)
+            config.deeplApiKey.setValue("", false)
+            com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackTranslator(deeplCandidate)
+
+            val noKeyCandidates = TranslationService.getCandidateTranslators("de")
+            noKeyCandidates.contains(deeplCandidate) shouldBe false
+
+            config.deeplApiKey.setValue("key:fx", false)
+            val withKeyCandidates = TranslationService.getCandidateTranslators("de")
+            withKeyCandidates.contains(deeplCandidate) shouldBe true
+        } finally {
+            config.translationPlugin.setValue(origTrans, false)
+            config.deeplApiKey.setValue(origKey, false)
+            com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackTranslator(null)
+        }
     }
 
     test("testOnnx reports success when test models are ready") {
@@ -1100,5 +1153,192 @@ class TranslationServiceSpec : FunSpec({
         java.nio.file.Files.exists(cacheFile) shouldBe false
 
         java.nio.file.Files.deleteIfExists(tempDir)
+    }
+
+    test("getCandidateTranslators and detectLanguage handle circuit-broken remote providers") {
+        val config = TranslationService.getConfig()
+        config.translationPlugin.setValue("deepl", false)
+        config.detectionPlugin.setValue("deepl", false)
+        config.deeplApiKey.setValue("test-key", false)
+
+        TranslationCache.tripCircuitBreaker(60_000L)
+        try {
+            val candidates = TranslationService.getCandidateTranslators("en")
+            candidates.any { it is com.stellar.lang.plugin.deepl.DeepLPlugin } shouldBe false
+
+            val detected = TranslationService.detectLanguage("Something in english")
+            detected shouldNotBe null
+        } finally {
+            TranslationCache.resetCircuitBreaker()
+            config.translationPlugin.setValue("libretranslate", false)
+            config.detectionPlugin.setValue("libretranslate", false)
+        }
+    }
+
+    test("DeepL single translation through TranslationService") {
+        val config = TranslationService.getConfig()
+        val origTrans = config.translationPlugin.value()
+        val origHost = config.deeplApiHost.value()
+        val origKey = config.deeplApiKey.value()
+        val origTarget = config.targetLanguage.value()
+
+        try {
+            config.translationPlugin.setValue("deepl", false)
+            config.deeplApiHost.setValue("http://127.0.0.1:$serverPort", false)
+            config.deeplApiKey.setValue("test-key", false)
+            config.targetLanguage.setValue("es", false)
+
+            responseBody = """{"translations":[{"detected_source_language":"EN","text":"Hola"}]}"""
+            val res = TranslationService.executeTranslation("Hello", "es")
+            res shouldNotBe null
+            res?.translatedText shouldBe "Hola"
+            res?.detectedLanguage shouldBe "en"
+            res?.isSameLanguage shouldBe false
+
+            // Same language response
+            responseBody = """{"translations":[{"detected_source_language":"ES","text":"Hola"}]}"""
+            val sameRes = TranslationService.executeTranslation("Hola", "es")
+            sameRes shouldNotBe null
+            sameRes?.isSameLanguage shouldBe true
+
+            // Untranslated / error response
+            responseBody = """{"translations":[]}"""
+            val failRes = TranslationService.executeTranslation("ErrorTest", "es")
+            failRes shouldBe null
+        } finally {
+            config.translationPlugin.setValue(origTrans, false)
+            config.deeplApiHost.setValue(origHost, false)
+            config.deeplApiKey.setValue(origKey, false)
+            config.targetLanguage.setValue(origTarget, false)
+        }
+    }
+
+    test("DeepL batch translation through TranslationService") {
+        val config = TranslationService.getConfig()
+        val origTrans = config.translationPlugin.value()
+        val origHost = config.deeplApiHost.value()
+        val origKey = config.deeplApiKey.value()
+        val origTarget = config.targetLanguage.value()
+
+        try {
+            config.translationPlugin.setValue("deepl", false)
+            config.deeplApiHost.setValue("http://127.0.0.1:$serverPort", false)
+            config.deeplApiKey.setValue("test-key", false)
+            config.targetLanguage.setValue("es", false)
+
+            responseBody = """{"translations":[""" +
+                """{"detected_source_language":"EN","text":"Hola"},""" +
+                """{"detected_source_language":"FR","text":"Monde"}]}"""
+            val batchRes = TranslationService.executeBatchTranslation(listOf("Hello", "World"), "es")
+            batchRes shouldNotBe null
+            batchRes?.size shouldBe 2
+            batchRes?.get(0)?.translatedText shouldBe "Hola"
+            batchRes?.get(0)?.detectedLanguage shouldBe "en"
+            batchRes?.get(0)?.isSameLanguage shouldBe false
+            batchRes?.get(1)?.translatedText shouldBe "Monde"
+
+            // Batch with same language
+            responseBody = """{"translations":[""" +
+                """{"detected_source_language":"ES","text":"Hola"},""" +
+                """{"detected_source_language":"ES","text":"Mundo"}]}"""
+            val sameBatch = TranslationService.executeBatchTranslation(listOf("Hola", "Mundo"), "es")
+            sameBatch shouldNotBe null
+            sameBatch?.get(0)?.isSameLanguage shouldBe true
+            sameBatch?.get(1)?.isSameLanguage shouldBe true
+
+            // Batch failure / empty
+            responseBody = """{"translations":[]}"""
+            val failBatch = TranslationService.executeBatchTranslation(listOf("Fail1", "Fail2"), "es")
+            failBatch shouldBe null
+        } finally {
+            config.translationPlugin.setValue(origTrans, false)
+            config.deeplApiHost.setValue(origHost, false)
+            config.deeplApiKey.setValue(origKey, false)
+            config.targetLanguage.setValue(origTarget, false)
+        }
+    }
+
+    test("normalizeLanguageCode handles null, blank, lol_us, and invalid lengths") {
+        TranslationService.normalizeLanguageCode(null) shouldNotBe ""
+        TranslationService.normalizeLanguageCode("") shouldNotBe ""
+        TranslationService.normalizeLanguageCode("   ") shouldNotBe ""
+        TranslationService.normalizeLanguageCode("lol_us") shouldBe "en"
+        TranslationService.normalizeLanguageCode("x") shouldBe "en"
+        TranslationService.normalizeLanguageCode("abcdef") shouldBe "en"
+        TranslationService.normalizeLanguageCode("FR_fr") shouldBe "fr"
+    }
+
+    test("default arguments for evict, getCandidateTranslators, and testDeepl") {
+        TranslationService.evict("sample_text")
+        val candidates = TranslationService.getCandidateTranslators()
+        candidates shouldNotBe null
+
+        val latch = CountDownLatch(1)
+        var deeplResult: Result<String>? = null
+        TranslationService.testDeepl("test-key") { res ->
+            deeplResult = res
+            latch.countDown()
+        }
+        latch.await(2, TimeUnit.SECONDS) shouldBe true
+        deeplResult shouldNotBe null
+    }
+
+    test("testConnection handles error responses with json and plain text") {
+        val latch1 = CountDownLatch(1)
+        var res1: Result<String>? = null
+        responseCode.set(500)
+        responseBody = """{"error": "custom error message"}"""
+        TranslationService.testConnection("http://127.0.0.1:$serverPort", "key") { r ->
+            res1 = r
+            latch1.countDown()
+        }
+        latch1.await(2, TimeUnit.SECONDS) shouldBe true
+        res1?.isFailure shouldBe true
+        res1?.exceptionOrNull()?.message shouldContain "custom error message"
+
+        val latch2 = CountDownLatch(1)
+        var res2: Result<String>? = null
+        responseBody = "plain error snippet"
+        TranslationService.testConnection("http://127.0.0.1:$serverPort", "key") { r ->
+            res2 = r
+            latch2.countDown()
+        }
+        latch2.await(2, TimeUnit.SECONDS) shouldBe true
+        res2?.isFailure shouldBe true
+        res2?.exceptionOrNull()?.message shouldContain "plain error snippet"
+    }
+
+    test("detectLanguage uses fallback detector when primary returns null or unknown") {
+        val dummyPrimary = object : com.stellar.lang.plugin.LanguageDetectorPlugin {
+            override val id = "dummy-primary"
+            override val displayName = "Dummy Primary"
+            override val description = "Dummy Primary Description"
+            override fun getStatus(): com.stellar.lang.plugin.PluginStatus =
+                com.stellar.lang.plugin.PluginStatus.Ready()
+            override suspend fun detectLanguage(text: String): String? = null
+        }
+        val dummyFallback = object : com.stellar.lang.plugin.LanguageDetectorPlugin {
+            override val id = "dummy-fallback"
+            override val displayName = "Dummy Fallback"
+            override val description = "Dummy Fallback Description"
+            override fun getStatus(): com.stellar.lang.plugin.PluginStatus =
+                com.stellar.lang.plugin.PluginStatus.Ready()
+            override suspend fun detectLanguage(text: String): String? = "de"
+        }
+
+        val config = TranslationService.getConfig()
+        val origDetection = config.detectionPlugin.value()
+        try {
+            com.stellar.lang.plugin.PluginRegistry.registerDetector(dummyPrimary)
+            com.stellar.lang.plugin.PluginRegistry.registerDetector(dummyFallback)
+            config.detectionPlugin.setValue("dummy-primary", false)
+            com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackDetector(dummyFallback)
+
+            val detected = TranslationService.detectLanguage("Zz123 unfamiliar")
+            detected shouldBe "de"
+        } finally {
+            config.detectionPlugin.setValue(origDetection, false)
+            com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackDetector(null)
+        }
     }
 })

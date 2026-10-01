@@ -86,11 +86,12 @@ class LibreTranslatePlugin(
     ): String? {
         return runCatching {
             val endpoint = URI.create(normalizeEndpoint(host, "/translate"))
+            val hasTags = text.contains("<ut>")
             val payload = JsonObject().apply {
                 addProperty("q", text)
                 addProperty("source", sourceLang)
                 addProperty("target", targetLang)
-                addProperty("format", "text")
+                addProperty("format", if (hasTags) "html" else "text")
                 if (apiKey.isNotBlank()) addProperty("api_key", apiKey)
             }
 
@@ -128,13 +129,14 @@ class LibreTranslatePlugin(
     ): List<String>? {
         return runCatching {
             val endpoint = URI.create(normalizeEndpoint(host, "/translate"))
+            val hasTags = texts.any { it.contains("<ut>") }
             val payload = JsonObject().apply {
                 val array = JsonArray()
                 texts.forEach { array.add(it) }
                 add("q", array)
                 addProperty("source", sourceLang)
                 addProperty("target", targetLang)
-                addProperty("format", "text")
+                addProperty("format", if (hasTags) "html" else "text")
                 if (apiKey.isNotBlank()) addProperty("api_key", apiKey)
             }
 

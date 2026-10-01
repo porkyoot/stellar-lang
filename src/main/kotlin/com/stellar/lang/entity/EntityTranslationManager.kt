@@ -1,6 +1,7 @@
 package com.stellar.lang.entity
 
 import com.stellar.lang.input.StellarLangInputHandler
+import com.stellar.lang.player.PlayerNameHelper
 import com.stellar.lang.service.TranslationResult
 import com.stellar.lang.service.TranslationService
 import net.minecraft.network.chat.Component
@@ -18,7 +19,7 @@ object EntityTranslationManager {
     internal val textComponentCache = ConcurrentHashMap<String, Component>()
     internal val failedEntities = ConcurrentHashMap.newKeySet<String>()
     private const val ACCESS_RETRY_COOLDOWN_MS = 5_000L
-    private val lastEntityRetryTimes = ConcurrentHashMap<String, Long>()
+    internal val lastEntityRetryTimes = ConcurrentHashMap<String, Long>()
 
     init {
         TranslationService.addSuccessListener { result ->
@@ -27,23 +28,35 @@ object EntityTranslationManager {
     }
 
     internal fun onTranslationSuccess(result: TranslationResult) {
-        if (result.isSameLanguage) return
         val targetLang = result.targetLanguage
         val textKey = "$targetLang::${result.originalText}"
         failedEntities.remove(textKey)
-        textComponentCache[textKey] = createFormattedName(result.translatedText)
+        if (result.isSameLanguage) {
+            textComponentCache.remove(textKey)
+        } else {
+            textComponentCache[textKey] = createFormattedName(result.translatedText)
+        }
     }
 
     fun onEntityLoaded(entity: Entity) {
         val customName = entity.customName ?: return
+        val config = TranslationService.getConfig()
+        if (!config.translatePlayerNames.value() && PlayerNameHelper.isPlayer(entity, customName)) return
         onEntityNameChanged(customName)
     }
 
     private fun buildTextKey(targetLang: String, plainText: String): String = "$targetLang::$plainText"
 
+    @Suppress("CyclomaticComplexMethod", "ReturnCount")
     fun refreshEntity(entity: Entity): Boolean {
-        val nameComp = entity.customName ?: entity.name
-        val plainText = getTranslatableText(nameComp) ?: return false
+        val config = TranslationService.getConfig()
+        val nameComp = entity.customName ?: runCatching { entity.name }.getOrNull() ?: return false
+        if (!config.translatePlayerNames.value() &&
+            PlayerNameHelper.isPlayer(entity, nameComp)
+        ) {
+            return false
+        }
+        val plainText = getTranslatableText(nameComp, entity) ?: return false
         val targetLang = TranslationService.getTargetLanguage()
         val textKey = buildTextKey(targetLang, plainText)
         textComponentCache.remove(textKey)
@@ -54,6 +67,9 @@ object EntityTranslationManager {
             if (result != null && !result.isSameLanguage) {
                 failedEntities.remove(textKey)
                 textComponentCache[textKey] = createFormattedName(result.translatedText)
+            } else if (result != null && result.isSameLanguage) {
+                failedEntities.remove(textKey)
+                textComponentCache.remove(textKey)
             } else if (result == null) {
                 failedEntities.add(textKey)
                 textComponentCache[textKey] = createFailedName(plainText)
@@ -62,9 +78,13 @@ object EntityTranslationManager {
         return true
     }
 
+    @Suppress("CyclomaticComplexMethod", "CognitiveComplexMethod")
     fun onEntityNameChanged(name: Component) {
-        val plainText = getTranslatableText(name) ?: return
         val config = TranslationService.getConfig()
+        if (!config.translatePlayerNames.value() && PlayerNameHelper.isPlayer(null, name)) {
+            return
+        }
+        val plainText = getTranslatableText(name) ?: return
         val targetLang = TranslationService.getTargetLanguage()
         val textKey = buildTextKey(targetLang, plainText)
 
@@ -81,6 +101,9 @@ object EntityTranslationManager {
             if (result != null && !result.isSameLanguage) {
                 failedEntities.remove(textKey)
                 textComponentCache[textKey] = createFormattedName(result.translatedText)
+            } else if (result != null && result.isSameLanguage) {
+                failedEntities.remove(textKey)
+                textComponentCache.remove(textKey)
             } else if (result == null && TranslationService.isFailed(plainText, targetLang)) {
                 failedEntities.add(textKey)
                 textComponentCache[textKey] = createFailedName(plainText)
@@ -97,10 +120,13 @@ object EntityTranslationManager {
         return null
     }
 
-    @Suppress("UnusedParameter", "ReturnCount")
+    @Suppress("ReturnCount")
     fun translateEntityName(entity: Entity? = null, original: Component): Component {
-        val plainText = getTranslatableText(original) ?: return original
         val config = TranslationService.getConfig()
+        if (!config.translatePlayerNames.value() && PlayerNameHelper.isPlayer(entity, original)) {
+            return original
+        }
+        val plainText = getTranslatableText(original, entity) ?: return original
         val targetLang = TranslationService.getTargetLanguage()
         val textKey = buildTextKey(targetLang, plainText)
 
@@ -140,6 +166,9 @@ object EntityTranslationManager {
                     if (result != null && !result.isSameLanguage) {
                         failedEntities.remove(textKey)
                         textComponentCache[textKey] = createFormattedName(result.translatedText)
+                    } else if (result != null && result.isSameLanguage) {
+                        failedEntities.remove(textKey)
+                        textComponentCache.remove(textKey)
                     } else if (result == null) {
                         failedEntities.add(textKey)
                         textComponentCache[textKey] = createFailedName(plainText)
@@ -158,32 +187,40 @@ object EntityTranslationManager {
         textComponentCache.clear()
         failedEntities.clear()
         lastEntityRetryTimes.clear()
+        PlayerNameHelper.clearProviders()
     }
 
-    private fun getTranslatableText(original: Component): String? {
+    private fun getTranslatableText(original: Component): String? = getTranslatableText(original, null)
+
+    private fun getTranslatableText(original: Component, entity: Entity?): String? {
         val config = TranslationService.getConfig()
         val disabled = !config.enabled.value() ||
             !config.translateEntities.value() ||
+            !config.translatePlayerNames.value() && PlayerNameHelper.isPlayer(entity, original) ||
             StellarLangInputHandler.isShowingOriginal()
         if (disabled) return null
 
-        val text = original.string.trim()
-        val isBadgePrefix = text.startsWith("[T]") || text.startsWith("[...]")
-        return if (text.length < MIN_TRANSLATABLE_LENGTH || isBadgePrefix) null else text
+        val text = com.stellar.lang.format.FormattingTagHelper.componentToFormattedText(original).trim()
+        val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(text)
+        val isBadgePrefix = clean.startsWith("[T]") || clean.startsWith("[...]")
+        return if (clean.length < MIN_TRANSLATABLE_LENGTH || isBadgePrefix) null else text
     }
 
     private fun createFormattedName(translatedText: String): MutableComponent {
         val badge = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(failed = false, trailingSpace = true)
-        return Component.empty().append(badge).append(Component.literal(translatedText))
+        val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(translatedText)
+        return Component.empty().append(badge).append(textComp)
     }
 
     private fun createTranslatingName(originalText: String): MutableComponent {
         val badge = com.stellar.lang.badge.TranslationBadgeHelper.createTranslatingBadge(trailingSpace = true)
-        return Component.empty().append(badge).append(Component.literal(originalText))
+        val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(originalText)
+        return Component.empty().append(badge).append(textComp)
     }
 
     private fun createFailedName(originalText: String): MutableComponent {
         val badge = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(failed = true, trailingSpace = true)
-        return Component.empty().append(badge).append(Component.literal(originalText))
+        val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(originalText)
+        return Component.empty().append(badge).append(textComp)
     }
 }

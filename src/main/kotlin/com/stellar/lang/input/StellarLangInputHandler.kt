@@ -104,6 +104,7 @@ object StellarLangInputHandler {
         blockEntityProvider = null
         heldItemProvider = null
         playerProvider = null
+        com.stellar.lang.player.PlayerNameHelper.clearProviders()
         TargetManager.clearTarget()
     }
 

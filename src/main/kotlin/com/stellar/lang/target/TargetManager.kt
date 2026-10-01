@@ -8,7 +8,7 @@ import net.minecraft.world.phys.EntityHitResult
 import net.minecraft.world.phys.HitResult
 
 /**
- * Tracks the targeted block and entity resolved by GameRendererMixin or Minecraft hit results.
+ * Tracks the targeted block and entity resolved by MinecraftMixin or Minecraft hit results.
  */
 object TargetManager {
     const val EXTENDED_TARGET_RANGE: Double = 8.0

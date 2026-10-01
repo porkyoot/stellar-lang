@@ -797,4 +797,24 @@ class StellarLangInputHandlerSpec : FunSpec({
         StellarLangInputHandler.heldItemProvider shouldBe null
         StellarLangInputHandler.playerProvider shouldBe null
     }
+
+    test("onKey and checkKeyDown edge cases") {
+        StellarLangInputHandler.checkKeyDown(null, 44) shouldBe false
+
+        // Action is not press
+        StellarLangInputHandler.onKey(44, StellarLangInputHandler.GLFW_RELEASE) shouldBe false
+        val keyEvent = net.minecraft.client.input.KeyEvent(44, 0, 0)
+        StellarLangInputHandler.onKey(keyEvent, StellarLangInputHandler.GLFW_RELEASE) shouldBe false
+
+        // Disabled config
+        val config = TranslationService.getConfig()
+        config.enabled.setValue(false, false)
+        try {
+            StellarLangInputHandler.onKey(44, StellarLangInputHandler.GLFW_PRESS) shouldBe false
+            val pressEvent = net.minecraft.client.input.KeyEvent(44, 0, 0)
+            StellarLangInputHandler.onKey(pressEvent, StellarLangInputHandler.GLFW_PRESS) shouldBe false
+        } finally {
+            config.enabled.setValue(true, false)
+        }
+    }
 })

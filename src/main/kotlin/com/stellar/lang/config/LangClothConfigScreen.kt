@@ -79,10 +79,21 @@ object LangClothConfigScreen {
             .setSaveConsumer { value -> config.hideIndicators.setValue(value, true) }
             .build()
 
+        val playerNamesToggle = entries
+            .startBooleanToggle(Component.literal("Translate Player Names"), config.translatePlayerNames.value())
+            .setDefaultValue(false)
+            .setTooltip(
+                Component.literal(
+                    "Globally enables or disables translation of player names in entity nametags and chat",
+                ),
+            )
+            .setSaveConsumer { value -> config.translatePlayerNames.setValue(value, true) }
+            .build()
+
         category.addEntry(masterToggle)
         category.addEntry(targetLang)
+        category.addEntry(playerNamesToggle)
         category.addEntry(hideIndicators)
-        category.addEntry(buildClearCacheButton(entries))
     }
 
     @Suppress("LongMethod")
@@ -96,26 +107,32 @@ object LangClothConfigScreen {
         var selectedTranslator = config.translationPlugin.value().trim().lowercase()
         var selectedDetector = config.detectionPlugin.value().trim().lowercase()
 
-        val providerOptions = listOf("onnx", "libretranslate")
+        val providerOptions = listOf("onnx", "libretranslate", "deepl")
         val nameMap = mapOf(
             "onnx" to "ONNX Runtime (Local Offline)",
             "libretranslate" to "LibreTranslate (HTTP API)",
+            "deepl" to "DeepL (Official API)",
         )
 
         val onnxSubBuilder = entries.startSubCategory(Component.literal("ONNX Runtime (Local Offline) Settings"))
         val libreSubBuilder = entries.startSubCategory(Component.literal("LibreTranslate (HTTP API) Settings"))
+        val deeplSubBuilder = entries.startSubCategory(Component.literal("DeepL (Official API) Settings"))
 
         buildOnnxSubCategory(onnxSubBuilder, entries, config)
         buildLibreSubCategory(libreSubBuilder, entries, config)
+        buildDeeplSubCategory(deeplSubBuilder, entries, config)
 
         val onnxSubCategory = onnxSubBuilder.build()
         val libreSubCategory = libreSubBuilder.build()
+        val deeplSubCategory = deeplSubBuilder.build()
 
         fun updateSubCategoryVisibility() {
             val needsOnnx = selectedTranslator == "onnx" || selectedDetector == "onnx"
             val needsLibre = selectedTranslator == "libretranslate" || selectedDetector == "libretranslate"
+            val needsDeepl = selectedTranslator == "deepl" || selectedDetector == "deepl"
             onnxSubCategory.setExpanded(needsOnnx)
             libreSubCategory.setExpanded(needsLibre)
+            deeplSubCategory.setExpanded(needsDeepl)
         }
 
         val transDropdown = entries
@@ -164,6 +181,7 @@ object LangClothConfigScreen {
         category.addEntry(detectDropdown)
         category.addEntry(onnxSubCategory)
         category.addEntry(libreSubCategory)
+        category.addEntry(deeplSubCategory)
     }
 
     private fun buildOnnxSubCategory(
@@ -270,6 +288,144 @@ object LangClothConfigScreen {
         subCategory.add(apiKey)
         subCategory.add(testButton)
         subCategory.add(instructions)
+    }
+
+    private fun buildDeeplSubCategory(
+        subCategory: me.shedaniel.clothconfig2.impl.builders.SubCategoryBuilder,
+        entries: ConfigEntryBuilder,
+        config: StellarLangConfig,
+    ) {
+        var currentApiKey = config.deeplApiKey.value()
+        var currentHost = config.deeplApiHost.value()
+
+        val apiKey = entries
+            .startStrField(Component.literal("DeepL API Key"), config.deeplApiKey.value())
+            .setDefaultValue("")
+            .setTooltip(
+                Component.literal(
+                    "Authentication key for DeepL API. Free keys end in :fx. Visit: https://www.deepl.com/pro-api",
+                ),
+            )
+            .setErrorSupplier { typed ->
+                currentApiKey = typed.trim()
+                java.util.Optional.empty()
+            }
+            .setSaveConsumer { value -> config.deeplApiKey.setValue(value.trim(), true) }
+            .build()
+
+        val apiHost = entries
+            .startStrField(Component.literal("DeepL API Host"), config.deeplApiHost.value())
+            .setDefaultValue("auto")
+            .setTooltip(
+                Component.literal("Base URL of DeepL API ('auto' detects Free/Pro based on key, or set custom proxy)"),
+            )
+            .setErrorSupplier { typed ->
+                currentHost = typed.trim()
+                java.util.Optional.empty()
+            }
+            .setSaveConsumer { value -> config.deeplApiHost.setValue(value.trim(), true) }
+            .build()
+
+        val formalityOptions = listOf("default", "more", "less", "prefer_more", "prefer_less")
+        val formalityField = entries
+            .startStringDropdownMenu(
+                Component.literal("Formality"),
+                config.deeplFormality.value(),
+                { id -> Component.literal(id.replace('_', ' ').replaceFirstChar { it.uppercase() }) },
+            )
+            .setSelections(formalityOptions)
+            .setDefaultValue("default")
+            .setTooltip(
+                Component.literal("Tone of translated text (formal or informal) for supported target languages"),
+            )
+            .setSaveConsumer { value -> config.deeplFormality.setValue(value.trim().lowercase(), true) }
+            .build()
+
+        val testButton = buildTestDeeplConnectionButton(
+            entries = entries,
+            config = config,
+            getKey = { currentApiKey },
+            getHost = { currentHost },
+        )
+
+        val instructions = entries
+            .startTextDescription(
+                Component.literal(
+                    "Need an API key? Visit https://www.deepl.com/pro-api to register for DeepL Free or Pro.",
+                ),
+            )
+            .build()
+
+        subCategory.add(apiKey)
+        subCategory.add(apiHost)
+        subCategory.add(formalityField)
+        subCategory.add(testButton)
+        subCategory.add(instructions)
+    }
+
+    private fun buildTestDeeplConnectionButton(
+        entries: ConfigEntryBuilder,
+        config: StellarLangConfig,
+        getKey: () -> String,
+        getHost: () -> String,
+    ): me.shedaniel.clothconfig2.api.AbstractConfigListEntry<*> {
+        var lastToggleValue = false
+        var testStatus = "Click to Test DeepL"
+        var testError: String? = null
+
+        return entries
+            .startBooleanToggle(Component.literal("Test DeepL Connection"), false)
+            .setYesNoTextSupplier { boolValue ->
+                if (boolValue != lastToggleValue) {
+                    lastToggleValue = boolValue
+                    val now = System.currentTimeMillis()
+                    if (now - lastTestTimeMs >= TEST_DEBOUNCE_MS && isTesting.compareAndSet(false, true)) {
+                        lastTestTimeMs = now
+                        testStatus = "⌛ Testing DeepL..."
+                        testError = null
+                        triggerDeeplConnectionTest(config, getKey(), getHost()) { status, error ->
+                            testStatus = status
+                            testError = error
+                            isTesting.set(false)
+                        }
+                    }
+                }
+                Component.literal(testStatus)
+            }
+            .setErrorSupplier { _ ->
+                testError?.let {
+                    java.util.Optional.of(Component.literal("Error: $it"))
+                } ?: java.util.Optional.empty()
+            }
+            .setTooltip(
+                Component.literal("Click to test connectivity and translation with the current DeepL API key"),
+            )
+            .build()
+    }
+
+    private fun triggerDeeplConnectionTest(
+        config: StellarLangConfig,
+        apiKey: String,
+        host: String,
+        onUpdate: (String, String?) -> Unit,
+    ) {
+        TranslationService.testDeepl(
+            apiKey = apiKey.ifBlank { config.deeplApiKey.value() },
+            host = host.ifBlank { config.deeplApiHost.value() },
+            targetLang = TranslationService.getTargetLanguage(),
+        ) { result ->
+            result.fold(
+                onSuccess = { translated ->
+                    onUpdate("✅ OK ('Hello' -> '$translated')", null)
+                    showToast("Stellar Lang", "DeepL OK! 'Hello' -> '$translated'")
+                },
+                onFailure = { err ->
+                    val msg = err.message ?: err::class.simpleName ?: "Connection failed"
+                    onUpdate("❌ Failed (Click to Retry)", msg)
+                    showToast("Stellar Lang", "DeepL Failed: $msg")
+                },
+            )
+        }
     }
 
     private fun buildApiHostField(

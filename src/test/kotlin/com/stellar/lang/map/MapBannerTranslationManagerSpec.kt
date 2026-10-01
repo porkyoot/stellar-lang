@@ -404,6 +404,7 @@ class MapBannerTranslationManagerSpec : FunSpec({
     }
 
     test("refreshAll and clearCache reset state properly") {
+        MapBannerTranslationManager.clearCache()
         MapBannerTranslationManager.textComponentCache["en::Test"] = Component.literal("Test")
         MapBannerTranslationManager.failedBanners.add("en::Fail")
 
@@ -411,5 +412,19 @@ class MapBannerTranslationManagerSpec : FunSpec({
         count shouldBe 1
         MapBannerTranslationManager.textComponentCache.isEmpty() shouldBe true
         MapBannerTranslationManager.failedBanners.isEmpty() shouldBe true
+    }
+
+    test("refreshBanner with badge prefixes and getLevel null") {
+        MapBannerTranslationManager.refreshBanner(Component.literal("[T] Mon Banner")) shouldBe true
+        MapBannerTranslationManager.refreshBanner(Component.literal("[...] Autre Banner")) shouldBe true
+
+        val origProvider = MapBannerTranslationManager.levelProvider
+        try {
+            MapBannerTranslationManager.levelProvider = { null }
+            val mapStack = createMockMapStack(MapId(999))
+            MapBannerTranslationManager.refreshMap(mapStack) shouldBe false
+        } finally {
+            MapBannerTranslationManager.levelProvider = origProvider
+        }
     }
 })

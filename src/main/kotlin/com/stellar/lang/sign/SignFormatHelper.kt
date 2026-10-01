@@ -2,7 +2,6 @@
 
 package com.stellar.lang.sign
 
-import net.minecraft.network.chat.Component
 import net.minecraft.world.level.block.entity.SignText
 
 /**
@@ -45,7 +44,7 @@ object SignFormatHelper {
     }
 
     fun isPureFormattingLine(line: String): Boolean {
-        val trimmed = line.trim()
+        val trimmed = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(line).trim()
         return trimmed.isNotEmpty() && trimmed.all { isBorderChar(it) || it.isWhitespace() }
     }
 
@@ -132,7 +131,11 @@ object SignFormatHelper {
         for (i in 0 until SignText.LINES) {
             if (i !in pureFormattingIndices) {
                 val text = assignedLines[i] ?: ""
-                newText = newText.setMessage(i, Component.literal(text))
+                val lineComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(
+                    text,
+                    originalText.getMessage(i, false).style,
+                )
+                newText = newText.setMessage(i, lineComp)
             }
         }
         return SignTranslationOutcome(newText, excessText?.ifBlank { null }, translatedSentence)

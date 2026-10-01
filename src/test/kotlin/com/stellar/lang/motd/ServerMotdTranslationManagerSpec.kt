@@ -29,6 +29,16 @@ class ServerMotdTranslationManagerSpec : FunSpec({
         data.motd.string shouldBe ""
     }
 
+    test("processMotd skips null motd") {
+        val data = ServerData("Test", "127.0.0.1", ServerData.Type.OTHER)
+        ServerData::class.java.getDeclaredField("motd").apply {
+            isAccessible = true
+            set(data, null)
+        }
+        ServerMotdTranslationManager.processMotd(data)
+        ServerMotdTranslationManager.getOriginalMotd(data) shouldBe null
+    }
+
     test("processMotd skips blank or short MOTD") {
         val data = ServerData("Test", "127.0.0.1", ServerData.Type.OTHER)
         val motd = Component.literal(" ")
@@ -161,5 +171,18 @@ class ServerMotdTranslationManagerSpec : FunSpec({
         val sameResult = TranslationResult(sameText, sameText, "fr", "fr", true)
         TranslationCache.completeInFlight(sameKey, sameResult)
         sameData.motd.string shouldBe sameText
+    }
+
+    test("processMotd falls back to serverData.motd when motdField is null") {
+        val origField = ServerMotdTranslationManager.motdField
+        try {
+            ServerMotdTranslationManager.motdField = null
+            val data = ServerData("TestFallback", "127.0.0.1", ServerData.Type.OTHER)
+            data.motd = Component.literal("Fallback MOTD content")
+            ServerMotdTranslationManager.processMotd(data)
+            ServerMotdTranslationManager.getOriginalMotd(data)?.string shouldBe "Fallback MOTD content"
+        } finally {
+            ServerMotdTranslationManager.motdField = origField
+        }
     }
 })

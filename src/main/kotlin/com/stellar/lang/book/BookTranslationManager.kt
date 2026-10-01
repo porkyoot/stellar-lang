@@ -66,7 +66,9 @@ object BookTranslationManager {
         callback: (BookTranslationResult) -> Unit,
     ) {
         val originalPages = bookAccess.pages()
-        val pageTexts = originalPages.map { it.string.trim() }
+        val pageTexts = originalPages.map {
+            com.stellar.lang.format.FormattingTagHelper.componentToFormattedText(it).trim()
+        }
         val targetLang = TranslationService.getTargetLanguage()
 
         if (!isTranslationEligible(pageTexts)) {
@@ -96,7 +98,9 @@ object BookTranslationManager {
     private fun isTranslationEligible(pageTexts: List<String>): Boolean {
         val config = TranslationService.getConfig()
         val enabled = config.enabled.value() && config.translateBooks.value()
-        return enabled && pageTexts.isNotEmpty() && pageTexts.any { it.isNotBlank() }
+        return enabled && pageTexts.isNotEmpty() && pageTexts.any {
+            com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(it).isNotBlank()
+        }
     }
 
     private fun dispatchBatchTranslationDetailed(
@@ -160,7 +164,10 @@ object BookTranslationManager {
         val newPages = originalPages.mapIndexed { index, origComp ->
             val res = results.getOrNull(index)
             if (res != null && isValidTranslation(res)) {
-                Component.literal(res.translatedText).setStyle(origComp.style)
+                com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(
+                    res.translatedText,
+                    origComp.style,
+                )
             } else {
                 origComp
             }

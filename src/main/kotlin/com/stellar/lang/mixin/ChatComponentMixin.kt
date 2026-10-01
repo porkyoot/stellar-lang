@@ -10,7 +10,7 @@ import org.spongepowered.asm.mixin.injection.ModifyVariable
 /**
  * Mixin into ChatComponent to process incoming chat messages for translation.
  */
-@Suppress("UnusedPrivateMember", "UnusedParameter")
+@Suppress("UnusedPrivateMember", "UnusedParameter", "LongParameterList")
 @Mixin(ChatComponent::class)
 class ChatComponentMixin {
     @ModifyVariable(
@@ -26,6 +26,7 @@ class ChatComponentMixin {
     )
     private fun stellarOnAddMessage(
         message: Component,
+        originalMessage: Component,
         signature: net.minecraft.network.chat.MessageSignature?,
         source: net.minecraft.client.multiplayer.chat.GuiMessageSource?,
         tag: net.minecraft.client.multiplayer.chat.GuiMessageTag?,
