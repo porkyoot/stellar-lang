@@ -380,7 +380,7 @@ object ChatTranslationManager {
         return resolveAndTranslate(component, payload, targetLang)
     }
 
-    @Suppress("ReturnCount")
+    @Suppress("ReturnCount", "LongMethod")
     private fun resolveAndTranslate(
         component: Component,
         payload: ParsedChatPayload,
@@ -406,6 +406,19 @@ object ChatTranslationManager {
             val translated = createTranslatedComponent(id, cached, payload.prefixComponent)
             tracked.translatedComponent = translated
             return translated
+        }
+
+        val quickLang = TranslationService.detectLanguageQuick(payload.messageText)
+        if (quickLang != null && TranslationService.isSameLanguage(quickLang, targetLang)) {
+            val sameResult = TranslationResult(
+                originalText = payload.messageText,
+                translatedText = payload.messageText,
+                detectedLanguage = quickLang,
+                targetLanguage = targetLang,
+                isSameLanguage = true,
+            )
+            TranslationService.putCache(sameResult)
+            return component
         }
 
         if (TranslationService.isFailed(payload.messageText, targetLang)) {

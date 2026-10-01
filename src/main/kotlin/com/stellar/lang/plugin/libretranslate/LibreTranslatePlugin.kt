@@ -249,7 +249,7 @@ class LibreTranslatePlugin(
         private const val HEADER_ACCEPT = "Accept"
         private const val DEFAULT_CONFIDENCE = 100f
         private const val SHORT_TEXT_THRESHOLD = 25
-        private const val MIN_CONFIDENCE_SHORT = 80f
-        private const val MIN_CONFIDENCE_DEFAULT = 60f
+        private const val MIN_CONFIDENCE_SHORT = 90f
+        private const val MIN_CONFIDENCE_DEFAULT = 80f
     }
 }

@@ -54,7 +54,7 @@ object TranslationService {
     private const val MAX_ATTEMPTS_PER_PROVIDER = 2
     private const val RETRY_DELAY_MS = 50L
     private const val LIBRETRANSLATE_PROVIDER_ID = "libretranslate"
-    private const val MIN_LIBRE_CONFIDENCE = 60.0f
+    private const val MIN_LIBRE_CONFIDENCE = 80.0f
     private const val DEFAULT_CONFIDENCE = 100f
 
     @Volatile
@@ -451,9 +451,30 @@ object TranslationService {
                 isSameLanguage = true,
             )
         }
+        if (com.stellar.lang.plugin.LanguageDetectionHelper.isUniversalSlang(cleanForCheck)) {
+            return TranslationResult(
+                originalText = text,
+                translatedText = text,
+                detectedLanguage = targetLang,
+                targetLanguage = targetLang,
+                isSameLanguage = true,
+            )
+        }
+        val quickLang = detectLanguageQuick(cleanForCheck)
+        if (quickLang != null && isSameLanguage(quickLang, targetLang)) {
+            return TranslationResult(
+                originalText = text,
+                translatedText = text,
+                detectedLanguage = quickLang,
+                targetLanguage = targetLang,
+                isSameLanguage = true,
+            )
+        }
 
+        val textWithProtectedTextmojis =
+            com.stellar.lang.plugin.LanguageDetectionHelper.protectTextmojisAndKaomojis(trimmed)
         val textToTranslate = com.stellar.lang.player.PlayerNameHelper.protectPlayerNames(
-            com.stellar.lang.format.FormattingTagHelper.encodeToUntranslatableTags(trimmed),
+            com.stellar.lang.format.FormattingTagHelper.encodeToUntranslatableTags(textWithProtectedTextmojis),
         )
 
         return runCatching {
@@ -1015,12 +1036,20 @@ object TranslationService {
             } else {
                 transElem.asString
             }
-            val detected = parseDetectedLanguage(json)
-            val isSame = isSameLanguage(detected, targetLang)
+            val rawDetected = parseDetectedLanguage(json)
+            val effectiveDetected = if (rawDetected == UNKNOWN_LANG && isSameLanguage(targetLang, "en") &&
+                !com.stellar.lang.plugin.LanguageDetectionHelper.hasForeignMarkers(originalText)
+            ) {
+                "en"
+            } else {
+                rawDetected
+            }
+            val isSame = isSameLanguage(effectiveDetected, targetLang)
+            val effectiveTranslated = if (isSame) originalText else translated
             TranslationResult(
                 originalText = originalText,
-                translatedText = translated,
-                detectedLanguage = detected,
+                translatedText = effectiveTranslated,
+                detectedLanguage = effectiveDetected,
                 targetLanguage = targetLang,
                 isSameLanguage = isSame,
             )
@@ -1040,13 +1069,21 @@ object TranslationService {
 
             originalTexts.mapIndexed { index, orig ->
                 val trans = translatedArray.get(index)?.asString ?: orig
-                val detected = if (detectedArray != null && index < detectedArray.size()) {
+                val rawDetected = if (detectedArray != null && index < detectedArray.size()) {
                     extractLanguageFromElement(detectedArray.get(index))
                 } else {
                     defaultDetected
                 }
-                val isSame = isSameLanguage(detected, targetLang)
-                val result = TranslationResult(orig, trans, detected, targetLang, isSame)
+                val effectiveDetected = if (rawDetected == UNKNOWN_LANG && isSameLanguage(targetLang, "en") &&
+                    !com.stellar.lang.plugin.LanguageDetectionHelper.hasForeignMarkers(orig)
+                ) {
+                    "en"
+                } else {
+                    rawDetected
+                }
+                val isSame = isSameLanguage(effectiveDetected, targetLang)
+                val effectiveTrans = if (isSame) orig else trans
+                val result = TranslationResult(orig, effectiveTrans, effectiveDetected, targetLang, isSame)
                 TranslationCache.put(result)
                 result
             }
@@ -1146,14 +1183,20 @@ object TranslationService {
         }
     }
 
+    @Suppress("ReturnCount")
     fun detectLanguageQuick(text: String): String? {
-        val trimmed = text.trim()
-        if (trimmed.isEmpty()) return null
-        val cached = TranslationCache.get(trimmed, getTargetLanguage())
+        val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(text).trim()
+        if (clean.isEmpty()) return null
+        if (com.stellar.lang.plugin.LanguageDetectionHelper.isUniversalSlang(clean)) {
+            return getTargetLanguage()
+        }
+        val cached = TranslationCache.get(clean, getTargetLanguage())
+        if (cached != null) return cached.detectedLanguage
+        val quick = com.stellar.lang.plugin.LanguageDetectionHelper.detectQuick(clean)
+        if (quick != null) return quick
         val detector = PluginRegistry.getActiveDetector()
-        return cached?.detectedLanguage
-            ?: (detector as? com.stellar.lang.plugin.onnx.OnnxLanguageDetectorPlugin)
-                ?.let { com.stellar.lang.plugin.onnx.OnnxInferenceEngine.detectLanguage(trimmed) }
+        return (detector as? com.stellar.lang.plugin.onnx.OnnxLanguageDetectorPlugin)
+            ?.let { com.stellar.lang.plugin.onnx.OnnxInferenceEngine.detectLanguage(clean) }
     }
 
     fun clearCache() {

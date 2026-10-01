@@ -180,4 +180,88 @@ class LanguageDetectionHelperSpec : FunSpec({
         val shortLanguages = arrayOf("en", "es", "de")
         LanguageDetectionHelper.selectBestLanguage(weakLogits, shortLanguages, "short") shouldBe null
     }
+
+    test("isEmoticonOrKaomoji accurately recognizes diverse textmojis, kaomojis, and ASCII emoticons") {
+        // Kaomoji & textmojis
+        LanguageDetectionHelper.isEmoticonOrKaomoji("¯\\_(ツ)_/¯") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("( ͡° ͜ʖ ͡°)") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("ಠ_ಠ") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("(╯°□°)╯︵ ┻━┻") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("┬─┬ノ( º _ ºノ)") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("ʕ•ᴥ•ʔ") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("(づ｡◕‿‿◕｡)づ") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("(◕‿◕)") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("(T_T)") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("(>_<)") shouldBe true
+
+        // Western emoticons
+        LanguageDetectionHelper.isEmoticonOrKaomoji(":)") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji(":-)") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji(":D") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji(";D") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji(":P") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("=)") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("xD") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("xDD") shouldBe true
+
+        // Gestures & Salutes
+        LanguageDetectionHelper.isEmoticonOrKaomoji("<3") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("</3") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("o7") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("\\o/") shouldBe true
+
+        // Discord / Twitch emotes & laughs
+        LanguageDetectionHelper.isEmoticonOrKaomoji(":pepe:") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji(":pog:") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("hahaha") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("jajaja") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("kekw") shouldBe true
+
+        // Normal phrases are not emoticons
+        LanguageDetectionHelper.isEmoticonOrKaomoji("Hello world") shouldBe false
+        LanguageDetectionHelper.isEmoticonOrKaomoji("C'est une maison") shouldBe false
+    }
+
+    test("hasForeignMarkers ignores kaomojis and text containing kaomojis without foreign accents") {
+        LanguageDetectionHelper.hasForeignMarkers("¯\\_(ツ)_/¯") shouldBe false
+        LanguageDetectionHelper.hasForeignMarkers("(╯°□°)╯︵ ┻━┻") shouldBe false
+        LanguageDetectionHelper.hasForeignMarkers("ಠ_ಠ") shouldBe false
+        LanguageDetectionHelper.hasForeignMarkers("hello ¯\\_(ツ)_/¯") shouldBe false
+
+        // Genuine foreign text should still be detected
+        LanguageDetectionHelper.hasForeignMarkers("Привет") shouldBe true
+        LanguageDetectionHelper.hasForeignMarkers("こんにちは") shouldBe true
+        LanguageDetectionHelper.hasForeignMarkers("Ta mère") shouldBe true
+        LanguageDetectionHelper.hasForeignMarkers("mañana") shouldBe true
+    }
+
+    test("protectTextmojisAndKaomojis wraps kaomojis in untranslatable tags") {
+        val input = "Hello ¯\\_(ツ)_/¯ look at this (╯°□°)╯︵ ┻━┻"
+        val protected = LanguageDetectionHelper.protectTextmojisAndKaomojis(input)
+        protected shouldBe "Hello <ut>¯\\_(ツ)_/¯</ut> look at this <ut>(╯°□°)╯︵ ┻━┻</ut>"
+    }
+
+    test("getQuickTranslation covers additional European and Slavic common words") {
+        LanguageDetectionHelper.getQuickTranslation("prego", "en") shouldBe "you're welcome"
+        LanguageDetectionHelper.getQuickTranslation("buongiorno", "en") shouldBe "good morning"
+        LanguageDetectionHelper.getQuickTranslation("buonanotte", "en") shouldBe "good night"
+        LanguageDetectionHelper.getQuickTranslation("ola", "en") shouldBe "hello"
+        LanguageDetectionHelper.getQuickTranslation("olá", "en") shouldBe "hello"
+        LanguageDetectionHelper.getQuickTranslation("obrigado", "en") shouldBe "thank you"
+        LanguageDetectionHelper.getQuickTranslation("obrigada", "en") shouldBe "thank you"
+        LanguageDetectionHelper.getQuickTranslation("привет", "en") shouldBe "hello"
+        LanguageDetectionHelper.getQuickTranslation("спасибо", "en") shouldBe "thank you"
+        LanguageDetectionHelper.getQuickTranslation("пожалуйста", "en") shouldBe "please"
+    }
+
+    test("isEmoticonOrKaomoji structural and symbol fallback matching") {
+        // Enclosed structural match with kaomoji characters
+        LanguageDetectionHelper.isEmoticonOrKaomoji("(っ˘ω˘ς)") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("乁( ⁰͡ Ĺ̯ ⁰͡ )ㄏ") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("┐( ˘_˘ )┌") shouldBe true
+
+        // Non-alphanumeric symbol only kaomoji
+        LanguageDetectionHelper.isEmoticonOrKaomoji("✧(˘ω˘)✧") shouldBe true
+        LanguageDetectionHelper.isEmoticonOrKaomoji("~(*_*)~") shouldBe true
+    }
 })

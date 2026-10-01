@@ -196,6 +196,16 @@ object LanguageDetectionHelper {
         "house", "home", "portal", "chest", "storage", "door", "bed", "box", "mail",
         "mailbox", "iron", "gold", "diamond", "sword", "axe", "pickaxe", "shovel",
         "stop", "fox", "sleepy", "castle", "outpost", "north", "south", "east", "west",
+        // Common pronouns, question words, verbs, and gamer terms
+        "i", "you", "u", "he", "she", "it", "we", "they", "me", "my", "your", "ur",
+        "what", "why", "who", "when", "where", "how", "which",
+        "do", "dont", "don't", "did", "does",
+        "go", "going", "gone", "went", "come", "coming", "came",
+        "get", "got", "give", "take", "make", "need", "want", "like", "see", "look",
+        "help", "kill", "die", "dead", "mine", "mining", "craft", "build", "base", "spawn",
+        "here", "there", "now", "wait", "again", "too", "also", "so", "very",
+        "some", "any", "no", "not", "all", "one", "two", "more", "much", "many",
+        "just", "only", "back", "bro", "dude", "man", "guy", "guys",
     )
 
     val UNIVERSAL_SLANG: Set<String> = setOf(
@@ -203,35 +213,163 @@ object LanguageDetectionHelper {
         "glhf", "gl", "hf", "wp", "afk", "brb", "omg", "omfg", "wtf", "wth", "idk", "idc",
         "tbh", "imo", "imho", "np", "ty", "thx", "pls", "plz", "yw", "gn", "gm", "o7",
         "bruh", "rip", "pog", "poggers", "f", "cap", "no cap", "fr", "frfr", "sus", "gtg", "g2g",
+        "bbl", "smh", "fyi", "btw", "ffs", "oof", "ez", "ezpz", "mb", "nvm", "rn", "ikr",
+        "sup", "cya", "l8r", "wb", "kek", "kekw", "lul", "lulz",
         "haha", "hahaha", "hahahaha", "hehe", "hehehe", "lolol", "lololol", "cool", "nice",
         "wow", "yay", "yup", "yep", "nope", "nah", "yes", "no", "hi", "bye", "hey",
     )
 
-    private const val MIN_SCORE_MARGIN = 1.0f
-    private const val SHORT_TEXT_MIN_MARGIN = 1.5f
+    val KNOWN_TEXTMOJIS: Set<String> = setOf(
+        // Shrugs & variants
+        "¯\\_(ツ)_/¯", "¯_(ツ)_/¯", "¯\\(ツ)/¯", "乁(ツ)ㄏ", "┐(￣ヘ￣)┌", "¯\\_(⊙_ʖ⊙)_/¯", "¯\\_( ͡° ͜ʖ ͡°)_/¯",
+        // Lenny Face & variants
+        "( ͡° ͜ʖ ͡°)", "( ͡ಥ ͜ʖ ͡ಥ)", "(ง ͠° ͟ل͜ ͡°)ง", "(͡° ͜ʖ ͡°)", "( ͡° ʖ̯ ͡°)", "( ͡~ ͜ʖ ͡°)", "( ͡o ͜ʖ ͡o)",
+        // Look of Disapproval & variants
+        "ಠ_ಠ", "ಠ╭╮ಠ", "ಠ益ಠ", "ಠ_ಥ", "ಠ~ಠ", "(ಠ_ಠ)", "(ಠ_ಥ)",
+        // Table flips & un-flips
+        "(╯°□°)╯︵ ┻━┻", "(╯°□°）╯︵ ┻━┻", "(ノಠ益ಠ)ノ彡┻━┻", "┬─┬ノ( º _ ºノ)", "┬─┬ノ(º_ºノ)",
+        "┻━┻︵ヽ(`Д´)ﾉ︵ ┻━┻", "(╯°Д°）╯︵/(.□ . \\)", "(ノ°Д°）ノ︵ ┻━┻", "┻━┻ ︵ ＼( °□° )／ ︵ ┻━┻",
+        // Cute / Happy / Hugs
+        "(◕‿◕)", "(◕‿◕✿)", "(＾▽＾)", "(＾◡＾)", "(づ｡◕‿‿◕｡)づ", "(つ≧▽≦)つ", "(人◕‿◕)", "(ﾉ◕ヮ◕)ﾉ*:･ﾟ✧",
+        "(｡◕‿◕｡)", "(✿◠‿◠)", "(◡‿◡✿)", "(◠‿◠)", "(^▽^)", "(^◡^)",
+        // Animals
+        "ʕ•ᴥ•ʔ", "ʕ ᵔᴥᵔ ʔ", "(=^･^=)", "(=^･ｪ･^=)", "(=^‥^=)", "( =①ω①=)", "(ᵔᴥᵔ)", "(=^..^=)",
+        // Crying / Sad / Tears
+        "(T_T)", "(TдT)", "(╥﹏╥)", "(︶︹︶)", "(;_;)", "(ToT)", "(｡•́︿•̀｡)", "(ಥ﹏ಥ)", "(T-T)",
+        // Flex / Fighting
+        "୧( ˵ ° ~ ° ˵ )୨", "ᕦ(ò_óˇ)ᕤ", "ᕙ(⇀‸↼‶)ᕗ", "ᕙ(▀̿̿Ĺ̯̿̿▀̿ ̿)ᕗ", "ᕦ( ͡° ͜ʖ ͡°)ᕤ",
+        // Sweat / Nervous / Surprised
+        "(・_・;)", "(・_・;)ゞ", "(；・∀・)", "(°o°)", "(o_O)", "(O_o)",
+        // Common horizontal text faces
+        "^_^", "^.^", "^^", "^^'", "-_-", "-__-", "-.-", "._.", ">_<", ">.<", ">_>", "<_<",
+        "o_o", "o_O", "O_o", "O_O", "o.o", "O.O", "0_0", "0.0", "x_x", "X_X", "x.x", "X.X",
+        "T_T", "T.T", "Q_Q", "Q.Q", ";_;", ";-;", ";.;", "+_+", "*_*", "@_@", "u_u", "U_U",
+        // Discord/Twitch style text emotes
+        ":pepe:", ":kekw:", ":pog:", ":poggers:", ":monkas:", ":kappa:", ":lul:", ":residentleeper:",
+        ":5head:", ":ez:", ":sadge:", ":ayaya:", ":copium:", ":hopium:", ":clueless:",
+    )
+
+    val WESTERN_EMOTICON_REGEX = Regex(
+        """(?i)^[:;=8xX%][\-~o*']?[)\](\[dDpPoO/\\|}{]+$""",
+    )
+
+    val GESTURE_EMOTICON_REGEX = Regex(
+        """^(?:<3|</3|\\o/|o/|\\o|o7|O7|v\.v|V\.V|d\[\-_-\]b)$""",
+    )
+
+    val HORIZONTAL_FACE_REGEX = Regex(
+        """^(?:[\^~><\-][._\-oO0][\^~><\-]|(?:[oO0xX+*@uUTTQ;\-_][._\-][oO0xX+*@uUTTQ;\-_])|(?:\^[._\-]?\^'?))$""",
+    )
+
+    val DISCORD_EMOTE_REGEX = Regex(
+        """^:[a-zA-Z0-9_+\-]+:$""",
+    )
+
+    val LAUGH_EXPRESSION_REGEX = Regex(
+        """(?i)^(?:(?:ha|he|ja|lo|kek|lul|xd)+l*|x+d+|a*ha+h*|j+a+j+a*|k+e+k+w*)$""",
+    )
+
+    private val KAOMOJI_CHARS = setOf(
+        '°', 'º', 'ಠ', 'ツ', '益', 'Д', 'д', 'ω', '◕', '◡', '‿', 'ᴥ', 'ʖ', 'ノ', '︵', '彡', '✧',
+        '人', 'ヘ', '▽', 'ヮ', '✿', '◠', '◡', 'ಥ', '╥', '｡', '́', '̀', 'ʕ', 'ʔ', 'ᕦ', 'ᕤ', 'ᕙ', 'ᕗ',
+        '乁', 'ㄏ', '┐', '┌', '┴', '┬', '━', '─', 'ヽ', 'ﾉ', '˵', 'Ĺ', '̯', '̿',
+    )
+
+    private const val MIN_SCORE_MARGIN = 1.8f
+    private const val SHORT_TEXT_MIN_MARGIN = 2.2f
+    private const val NON_ENGLISH_PLAIN_MARGIN = 1.5f
 
     fun normalizeRepeatedCharacters(raw: String): String {
         return raw.replace(Regex("(?i)(.)\\1{2,}")) { it.groupValues[1] }
     }
 
+    fun isEmoticonOrKaomoji(raw: String): Boolean {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return false
+        if (trimmed in KNOWN_TEXTMOJIS) return true
+        if (trimmed.lowercase(Locale.ROOT) in KNOWN_TEXTMOJIS) return true
+
+        if (WESTERN_EMOTICON_REGEX.matches(trimmed)) return true
+        if (GESTURE_EMOTICON_REGEX.matches(trimmed)) return true
+        if (HORIZONTAL_FACE_REGEX.matches(trimmed)) return true
+        if (DISCORD_EMOTE_REGEX.matches(trimmed)) return true
+        if (LAUGH_EXPRESSION_REGEX.matches(trimmed)) return true
+
+        val strippedSurround = trimmed.trim('~', ' ', '\t')
+        val unwrapped = if ((strippedSurround.startsWith("(") && strippedSurround.endsWith(")")) ||
+            (strippedSurround.startsWith("[") && strippedSurround.endsWith("]")) ||
+            (strippedSurround.startsWith("（") && strippedSurround.endsWith("）"))
+        ) {
+            strippedSurround.substring(1, strippedSurround.length - 1).trim()
+        } else {
+            null
+        }
+        if (unwrapped != null && (HORIZONTAL_FACE_REGEX.matches(unwrapped) || WESTERN_EMOTICON_REGEX.matches(unwrapped))) {
+            return true
+        }
+
+        val startsKaomoji = trimmed.startsWith("(") || trimmed.startsWith("[") || trimmed.startsWith("（") ||
+            trimmed.startsWith("¯\\_") || trimmed.startsWith("乁") || trimmed.startsWith("┐") ||
+            trimmed.startsWith("ʕ") || trimmed.startsWith("ᕦ") || trimmed.startsWith("ᕙ") ||
+            trimmed.startsWith("(づ") || trimmed.startsWith("(つ") || trimmed.startsWith("┻━┻") ||
+            trimmed.startsWith("┬─┬") || trimmed.startsWith("ノ")
+        val endsKaomoji = trimmed.endsWith(")") || trimmed.endsWith("]") || trimmed.endsWith("）") ||
+            trimmed.endsWith("_/¯") || trimmed.endsWith("/¯") || trimmed.endsWith("ㄏ") ||
+            trimmed.endsWith("┌") || trimmed.endsWith("ʔ") || trimmed.endsWith("ᕤ") ||
+            trimmed.endsWith("ᕗ") || trimmed.endsWith(")づ") || trimmed.endsWith(")つ") ||
+            trimmed.endsWith("┻━┻") || trimmed.endsWith("ノ")
+
+        if (startsKaomoji && endsKaomoji && trimmed.any { it in KAOMOJI_CHARS }) {
+            return true
+        }
+
+        if (trimmed.any { it in KAOMOJI_CHARS } && trimmed.none { it in 'a'..'z' || it in 'A'..'Z' || it in '0'..'9' }) {
+            return true
+        }
+
+        return false
+    }
+
+    fun stripKaomojisAndEmoticons(text: String): String {
+        var result = text
+        for (emoji in KNOWN_TEXTMOJIS) {
+            result = result.replace(emoji, " ")
+        }
+        val words = result.split(Regex("\\s+"))
+        return words.filterNot { isEmoticonOrKaomoji(it) }.joinToString(" ")
+    }
+
+    fun protectTextmojisAndKaomojis(text: String): String {
+        var result = text
+        for (emoji in KNOWN_TEXTMOJIS) {
+            if (result.contains(emoji)) {
+                result = result.replace(emoji, "<ut>$emoji</ut>")
+            }
+        }
+        return result
+    }
+
     fun isUniversalSlang(raw: String): Boolean {
+        val trimmed = raw.trim()
+        if (trimmed.isEmpty()) return false
+        if (isEmoticonOrKaomoji(trimmed)) return true
         val clean = cleanForDetection(raw)
         if (clean.isEmpty()) return false
+        if (isEmoticonOrKaomoji(clean)) return true
         val words = clean.split(Regex("\\s+")).filter { it.isNotEmpty() }
         if (words.isEmpty()) return false
         return words.all { word ->
             val norm = normalizeRepeatedCharacters(word)
             norm in UNIVERSAL_SLANG ||
+                isEmoticonOrKaomoji(word) ||
+                isEmoticonOrKaomoji(norm) ||
                 isEmoticonOrLaugh(word) ||
                 isEmoticonOrLaugh(norm)
         }
     }
 
     private fun isEmoticonOrLaugh(word: String): Boolean {
-        if (word in setOf(":)", ":(", ":d", ":p", ":3", ";-)", ";)", "-_-", "^^", "^_^", "<3", "xd", "o7")) return true
-        if (word.matches(Regex("(?i)^(ha|he|ja|lo)+l*$"))) return true
-        if (word.matches(Regex("(?i)^x+d+$"))) return true
-        return false
+        return isEmoticonOrKaomoji(word)
     }
 
     /**
@@ -259,26 +397,39 @@ object LanguageDetectionHelper {
         val normalized = normalizeRepeatedCharacters(clean)
         val words = clean.split(Regex("\\s+")).filter { it.isNotEmpty() }
         val normWords = normalized.split(Regex("\\s+")).filter { it.isNotEmpty() }
-        if (words.size in 1..10) {
-            val englishHits = words.count { it in ENGLISH_SPECIFIC_WORDS } +
-                normWords.count { it in ENGLISH_SPECIFIC_WORDS && it !in words }
-            if (englishHits >= 2 || (englishHits >= 1 && words.size <= 2)) {
-                return "en"
-            }
+        if (words.size in 1..15) {
             val frenchHits = words.count { it in FRENCH_SPECIFIC_WORDS } +
                 normWords.count { it in FRENCH_SPECIFIC_WORDS && it !in words }
             if (frenchHits >= 2 || (frenchHits >= 1 && (clean.contains("è") || clean.contains("é") || clean.contains("ê")))) {
                 return "fr"
+            }
+            val englishHits = words.count { it in ENGLISH_SPECIFIC_WORDS } +
+                normWords.count { it in ENGLISH_SPECIFIC_WORDS && it !in words }
+            val threshold = when {
+                words.size <= 2 -> 1
+                words.size <= 6 -> 2
+                else -> 3
+            }
+            if (englishHits >= threshold) {
+                return "en"
             }
         }
 
         return null
     }
 
+    fun hasForeignMarkers(text: String): Boolean {
+        if (isEmoticonOrKaomoji(text)) return false
+        val stripped = stripKaomojisAndEmoticons(text)
+        if (detectScript(stripped) != null) return true
+        val clean = stripped.lowercase(Locale.ROOT)
+        return clean.any { it in "éèêëàâùûôîïçœñ¿¡äöüßøåæ" }
+    }
+
     private fun cleanForDetection(raw: String): String {
-        return raw.trim()
-            .trimEnd('_') // Remove sign blinking cursor
-            .trim()
+        val trimmed = raw.trim().trimEnd('_').trim()
+        if (isEmoticonOrKaomoji(trimmed)) return trimmed.lowercase(Locale.ROOT)
+        return trimmed
             .lowercase(Locale.ROOT)
             .replace(Regex("[!?,.:;\"'()\\[\\]{}]+$"), "")
             .trim()
@@ -381,7 +532,10 @@ object LanguageDetectionHelper {
 
         val isShort = clean.length <= 25 || clean.split(Regex("\\s+")).size <= 3
         val hasRepeating = clean.contains(Regex("(.)\\1{2,}"))
-        val requiredMargin = if (isShort || hasRepeating) SHORT_TEXT_MIN_MARGIN else MIN_SCORE_MARGIN
+        var requiredMargin = if (isShort || hasRepeating) SHORT_TEXT_MIN_MARGIN else MIN_SCORE_MARGIN
+        if (bestLang != "en" && !hasForeignMarkers(clean)) {
+            requiredMargin += NON_ENGLISH_PLAIN_MARGIN
+        }
 
         return if (bestScore - secondScore >= requiredMargin) bestLang else null
     }
