@@ -6,7 +6,7 @@ import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.MutableComponent
 
 /**
- * Utility for generating visual [T] and [...] badges across signs, chat, items, and entities.
+ * Utility for generating visual flag and [...] badges across signs, chat, items, and entities.
  */
 object TranslationBadgeHelper {
     const val INDICATOR_COLOR: Int = 0x55FFFF

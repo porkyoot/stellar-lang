@@ -10,6 +10,7 @@ package com.stellar.lang.config
 import com.stellar.core.config.ConfigManager
 import com.stellar.core.input.Key
 import com.stellar.lang.StellarLangMod
+import com.stellar.lang.badge.LanguageFlagHelper
 import com.stellar.lang.service.TranslationService
 import me.shedaniel.clothconfig2.api.ConfigBuilder
 import me.shedaniel.clothconfig2.api.ConfigEntryBuilder
@@ -61,33 +62,32 @@ object LangClothConfigScreen {
             .build()
 
         val inferred = TranslationService.inferTargetLanguage().uppercase()
+        val currentTarget = config.targetLanguage.value().trim().lowercase()
+        val effectiveLang = if (currentTarget == "auto" || currentTarget.isBlank()) {
+            TranslationService.inferTargetLanguage()
+        } else {
+            currentTarget
+        }
+        val flagChar = LanguageFlagHelper.getFlagChar(effectiveLang)
+        val langName = LanguageFlagHelper.getLanguageName(effectiveLang)
+
         val targetLang = entries
-            .startStrField(Component.literal("Target Language"), config.targetLanguage.value())
+            .startStrField(Component.literal("$flagChar Target Language"), config.targetLanguage.value())
             .setDefaultValue("auto")
             .setTooltip(
                 Component.literal(
-                    "Language code to translate into (e.g. auto, en, es, fr). 'auto' infers from game ($inferred).",
+                    "Target: $flagChar $langName (${effectiveLang.uppercase()})\n" +
+                        "Language code to translate into (e.g. auto, en, es, fr). 'auto' infers from game ($inferred).",
                 ),
             )
             .setSaveConsumer { value -> config.targetLanguage.setValue(value.trim().lowercase(), true) }
             .build()
 
         val hideIndicators = entries
-            .startBooleanToggle(Component.literal("Hide [T] and [...] Indicators"), config.hideIndicators.value())
+            .startBooleanToggle(Component.literal("Hide Flag and [...] Indicators"), config.hideIndicators.value())
             .setDefaultValue(false)
-            .setTooltip(Component.literal("Hides visual [T] and [...] status badges on translated text"))
+            .setTooltip(Component.literal("Hides visual flag and [...] status badges on translated text"))
             .setSaveConsumer { value -> config.hideIndicators.setValue(value, true) }
-            .build()
-
-        val playerNamesToggle = entries
-            .startBooleanToggle(Component.literal("Translate Player Names"), config.translatePlayerNames.value())
-            .setDefaultValue(false)
-            .setTooltip(
-                Component.literal(
-                    "Globally enables or disables translation of player names in entity nametags and chat",
-                ),
-            )
-            .setSaveConsumer { value -> config.translatePlayerNames.setValue(value, true) }
             .build()
 
         val errorToastsToggle = entries
@@ -101,7 +101,6 @@ object LangClothConfigScreen {
 
         category.addEntry(masterToggle)
         category.addEntry(targetLang)
-        category.addEntry(playerNamesToggle)
         category.addEntry(hideIndicators)
         category.addEntry(errorToastsToggle)
     }
@@ -618,7 +617,7 @@ object LangClothConfigScreen {
         val chatEntry = entries
             .startBooleanToggle(Component.literal("Translate Chat"), config.translateChat.value())
             .setDefaultValue(true)
-            .setTooltip(Component.literal("Translates incoming chat with clickable [T] toggle"))
+            .setTooltip(Component.literal("Translates incoming chat with clickable flag toggle"))
             .setSaveConsumer { value -> config.translateChat.setValue(value, true) }
             .build()
 
@@ -633,7 +632,7 @@ object LangClothConfigScreen {
             .startBooleanToggle(Component.literal("Sign Tooltips & Indicators"), config.signTooltips.value())
             .setDefaultValue(true)
             .setTooltip(
-                Component.literal("Renders floating [T] indicators and overflow tooltips when aiming at signs"),
+                Component.literal("Renders floating flag indicators and overflow tooltips when aiming at signs"),
             )
             .setSaveConsumer { value -> config.signTooltips.setValue(value, true) }
             .build()
@@ -668,6 +667,17 @@ object LangClothConfigScreen {
             .setSaveConsumer { value -> config.translateEntities.setValue(value, true) }
             .build()
 
+        val playerNamesEntry = entries
+            .startBooleanToggle(Component.literal("Translate Player Names"), config.translatePlayerNames.value())
+            .setDefaultValue(false)
+            .setTooltip(
+                Component.literal(
+                    "Globally enables or disables translation of player names in entity nametags and chat",
+                ),
+            )
+            .setSaveConsumer { value -> config.translatePlayerNames.setValue(value, true) }
+            .build()
+
         val itemsEntry = entries
             .startBooleanToggle(Component.literal("Translate Items"), config.translateItems.value())
             .setDefaultValue(true)
@@ -695,6 +705,7 @@ object LangClothConfigScreen {
         category.addEntry(signRaycastIntervalEntry)
         category.addEntry(booksEntry)
         category.addEntry(entitiesEntry)
+        category.addEntry(playerNamesEntry)
         category.addEntry(itemsEntry)
         category.addEntry(containersEntry)
         category.addEntry(mapBannersEntry)

@@ -75,7 +75,7 @@ class StellarLangConfig : ReflectiveConfig() {
     @Comment("Enable translation of banners and markers on maps")
     val translateMapBanners: TrackedValue<Boolean> = value(true)
 
-    @Comment("Hide the [T] and [...] translation and in-flight status indicators")
+    @Comment("Hide the flag and [...] translation and in-flight status indicators")
     val hideIndicators: TrackedValue<Boolean> = value(false)
 
     @Comment("GLFW key code to show original text on signs and entities (default: COMMA = 44)")
