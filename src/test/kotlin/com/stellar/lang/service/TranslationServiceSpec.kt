@@ -301,7 +301,7 @@ class TranslationServiceSpec : FunSpec({
         val failedMap = failedField.get(TranslationCache) as java.util.concurrent.ConcurrentHashMap<String, Long>
 
         val testKey = "es::ExpiredThrottle"
-        // Set failed timestamp to 20 seconds in the past (exceeds 10_000ms cooldown)
+        // Set failed timestamp to 20 seconds in the past (exceeds initial 15_000ms cooldown)
         failedMap[testKey] = System.currentTimeMillis() - 20_000L
 
         val latch = CountDownLatch(1)

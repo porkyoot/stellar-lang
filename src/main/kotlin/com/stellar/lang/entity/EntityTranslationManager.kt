@@ -92,7 +92,8 @@ object EntityTranslationManager {
         if (cachedResult != null) {
             if (!cachedResult.isSameLanguage && !textComponentCache.containsKey(textKey)) {
                 failedEntities.remove(textKey)
-                textComponentCache[textKey] = createFormattedName(cachedResult.translatedText)
+                textComponentCache[textKey] =
+                    createFormattedName(cachedResult.translatedText, cachedResult.detectedLanguage)
             }
             return
         }
@@ -100,7 +101,8 @@ object EntityTranslationManager {
         TranslationService.translateAsync(plainText) { result ->
             if (result != null && !result.isSameLanguage) {
                 failedEntities.remove(textKey)
-                textComponentCache[textKey] = createFormattedName(result.translatedText)
+                textComponentCache[textKey] =
+                    createFormattedName(result.translatedText, result.detectedLanguage)
             } else if (result != null && result.isSameLanguage) {
                 failedEntities.remove(textKey)
                 textComponentCache.remove(textKey)
@@ -150,7 +152,7 @@ object EntityTranslationManager {
         val cachedResult = TranslationService.getCached(plainText, targetLang)
         if (cachedResult != null) {
             if (cachedResult.isSameLanguage) return original
-            val comp = createFormattedName(cachedResult.translatedText)
+            val comp = createFormattedName(cachedResult.translatedText, cachedResult.detectedLanguage)
             failedEntities.remove(textKey)
             textComponentCache[textKey] = comp
             return comp
@@ -165,7 +167,8 @@ object EntityTranslationManager {
                 TranslationService.translateAsync(plainText, forceRetry = true) { result ->
                     if (result != null && !result.isSameLanguage) {
                         failedEntities.remove(textKey)
-                        textComponentCache[textKey] = createFormattedName(result.translatedText)
+                        textComponentCache[textKey] =
+                            createFormattedName(result.translatedText, result.detectedLanguage)
                     } else if (result != null && result.isSameLanguage) {
                         failedEntities.remove(textKey)
                         textComponentCache.remove(textKey)
@@ -192,6 +195,7 @@ object EntityTranslationManager {
 
     private fun getTranslatableText(original: Component): String? = getTranslatableText(original, null)
 
+    @Suppress("CyclomaticComplexMethod")
     private fun getTranslatableText(original: Component, entity: Entity?): String? {
         val config = TranslationService.getConfig()
         val disabled = !config.enabled.value() ||
@@ -202,12 +206,17 @@ object EntityTranslationManager {
 
         val text = com.stellar.lang.format.FormattingTagHelper.componentToFormattedText(original).trim()
         val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(text)
-        val isBadgePrefix = clean.startsWith("[T]") || clean.startsWith("[...]")
+        val isBadgePrefix = clean.startsWith("[T]") || clean.startsWith("[...]") ||
+            com.stellar.lang.badge.LanguageFlagHelper.isFlagPrefix(clean)
         return if (clean.length < MIN_TRANSLATABLE_LENGTH || isBadgePrefix) null else text
     }
 
-    private fun createFormattedName(translatedText: String): MutableComponent {
-        val badge = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(failed = false, trailingSpace = true)
+    private fun createFormattedName(translatedText: String, lang: String? = null): MutableComponent {
+        val badge = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(
+            lang = lang,
+            failed = false,
+            trailingSpace = true,
+        )
         val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(translatedText)
         return Component.empty().append(badge).append(textComp)
     }

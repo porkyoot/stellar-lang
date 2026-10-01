@@ -1,6 +1,7 @@
 dependencies {
     implementation(project(":stellar-core"))
     implementation("com.microsoft.onnxruntime:onnxruntime:1.20.0")
+    implementation("net.fellbaum:jemoji:1.5.2")
     compileOnly("com.terraformersmc:modmenu:11.0.3-local")
     compileOnly("me.shedaniel.cloth:cloth-config-fabric:15.0.140-local")
     testImplementation("com.terraformersmc:modmenu:11.0.3-local")
@@ -11,7 +12,7 @@ tasks.named<Jar>("jar") {
     from(project(":stellar-core").the<SourceSetContainer>()["main"].output)
     from(provider {
         configurations.named("runtimeClasspath").get()
-            .filter { it.name.startsWith("onnxruntime") }
+            .filter { it.name.startsWith("onnxruntime") || it.name.startsWith("jemoji") }
             .map { zipTree(it) }
     }) {
         exclude("META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA")

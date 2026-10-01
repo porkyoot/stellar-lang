@@ -40,7 +40,8 @@ object SignTranslationManager {
         failedSignKeys.remove(textKey)
         if (!textOutcomeCache.containsKey(textKey)) {
             val dummySignText = SignText()
-            textOutcomeCache[textKey] = applyTranslatedLinesWithOutcome(dummySignText, result.translatedText)
+            textOutcomeCache[textKey] =
+                applyTranslatedLinesWithOutcome(dummySignText, result.translatedText, result.detectedLanguage)
         }
     }
 
@@ -89,7 +90,8 @@ object SignTranslationManager {
         val cached = TranslationService.getCached(sentence, targetLang)
         if (cached != null) {
             if (!cached.isSameLanguage && !textOutcomeCache.containsKey(textKey)) {
-                textOutcomeCache[textKey] = applyTranslatedLinesWithOutcome(signText, cached.translatedText)
+                textOutcomeCache[textKey] =
+                    applyTranslatedLinesWithOutcome(signText, cached.translatedText, cached.detectedLanguage)
                 failedSignKeys.remove(textKey)
             }
             return
@@ -107,7 +109,8 @@ object SignTranslationManager {
 
         TranslationService.translateAsync(sentence, forceRetry = forceRetry) { result ->
             if (result != null && !result.isSameLanguage) {
-                textOutcomeCache[textKey] = applyTranslatedLinesWithOutcome(signText, result.translatedText)
+                textOutcomeCache[textKey] =
+                    applyTranslatedLinesWithOutcome(signText, result.translatedText, result.detectedLanguage)
                 failedSignKeys.remove(textKey)
             } else if (result != null && result.isSameLanguage) {
                 failedSignKeys.remove(textKey)
@@ -166,7 +169,8 @@ object SignTranslationManager {
         val cachedResult = TranslationService.getCached(sentence, targetLang)
         if (cachedResult != null) {
             if (cachedResult.isSameLanguage) return null
-            val newOutcome = applyTranslatedLinesWithOutcome(signText, cachedResult.translatedText)
+            val newOutcome =
+                applyTranslatedLinesWithOutcome(signText, cachedResult.translatedText, cachedResult.detectedLanguage)
             textOutcomeCache[textKey] = newOutcome
             return newOutcome
         }
@@ -234,8 +238,9 @@ object SignTranslationManager {
     fun applyTranslatedLinesWithOutcome(
         originalText: SignText,
         translatedSentence: String,
+        detectedLanguage: String? = null,
     ): SignFormatHelper.SignTranslationOutcome {
-        return SignFormatHelper.applyTranslatedLinesWithOutcome(originalText, translatedSentence)
+        return SignFormatHelper.applyTranslatedLinesWithOutcome(originalText, translatedSentence, detectedLanguage)
     }
 
     fun isPureFormattingLine(line: String): Boolean = SignFormatHelper.isPureFormattingLine(line)

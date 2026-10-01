@@ -73,6 +73,7 @@ object TranslationService {
         val text: String,
         val targetLang: String,
         val failedAt: Long,
+        val attemptCount: Int = 1,
     )
 
     internal val failedRequests = ConcurrentHashMap<String, FailedRequest>()
@@ -242,7 +243,9 @@ object TranslationService {
                 val isDownloading = transStatus is PluginStatus.Downloading || detStatus is PluginStatus.Downloading
                 if (!isDownloading) {
                     TranslationCache.markFailed(key)
-                    failedRequests[key] = FailedRequest(trimmed, targetLang, System.currentTimeMillis())
+                    val existing = failedRequests[key]
+                    val attempt = (existing?.attemptCount ?: 0) + 1
+                    failedRequests[key] = FailedRequest(trimmed, targetLang, System.currentTimeMillis(), attempt)
                 }
             }
             TranslationCache.completeInFlight(key, result)
@@ -1060,7 +1063,9 @@ object TranslationService {
     fun markFailed(text: String, targetLang: String = getTargetLanguage()) {
         val key = cacheKey(text, targetLang)
         TranslationCache.markFailed(key)
-        failedRequests[key] = FailedRequest(text, targetLang, System.currentTimeMillis())
+        val existing = failedRequests[key]
+        val attempt = (existing?.attemptCount ?: 0) + 1
+        failedRequests[key] = FailedRequest(text, targetLang, System.currentTimeMillis(), attempt)
     }
 
     fun cacheKey(text: String, targetLang: String): String = TranslationCache.cacheKey(text, targetLang)
@@ -1087,13 +1092,13 @@ object TranslationService {
 
         val currentTargetLang = getTargetLanguage()
         val now = System.currentTimeMillis()
-        val entriesToRetry = failedRequests.entries.filter { (_, req) ->
-            req.targetLang == currentTargetLang && now - req.failedAt >= TranslationCache.ERROR_COOLDOWN_MS
+        val entriesToRetry = failedRequests.entries.filter { (key, req) ->
+            val cooldown = TranslationCache.getCooldownMs(key)
+            req.targetLang == currentTargetLang && now - req.failedAt >= cooldown
         }
 
         for ((key, req) in entriesToRetry) {
             failedRequests.remove(key)
-            TranslationCache.removeFailed(key)
             translateAsync(req.text) { /* completion triggers notifySuccess or re-registers failedRequest */ }
         }
     }

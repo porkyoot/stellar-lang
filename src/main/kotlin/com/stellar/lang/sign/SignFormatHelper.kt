@@ -22,6 +22,7 @@ object SignFormatHelper {
         val signText: SignText,
         val excessText: String?,
         val fullTranslation: String = "",
+        val detectedLanguage: String? = null,
     ) {
         val hasOverflow: Boolean
             get() = !excessText.isNullOrBlank() ||
@@ -89,6 +90,7 @@ object SignFormatHelper {
     fun applyTranslatedLinesWithOutcome(
         originalText: SignText,
         translatedSentence: String,
+        detectedLanguage: String? = null,
     ): SignTranslationOutcome {
         val pureFormattingIndices = (0 until SignText.LINES).filter { i ->
             isPureFormattingLine(originalText.getMessage(i, false).string)
@@ -100,6 +102,7 @@ object SignFormatHelper {
                 signText = originalText,
                 excessText = translatedSentence.ifBlank { null },
                 fullTranslation = translatedSentence,
+                detectedLanguage = detectedLanguage,
             )
         }
 
@@ -138,7 +141,12 @@ object SignFormatHelper {
                 newText = newText.setMessage(i, lineComp)
             }
         }
-        return SignTranslationOutcome(newText, excessText?.ifBlank { null }, translatedSentence)
+        return SignTranslationOutcome(
+            signText = newText,
+            excessText = excessText?.ifBlank { null },
+            fullTranslation = translatedSentence,
+            detectedLanguage = detectedLanguage,
+        )
     }
 
     private fun packNonLastSlot(words: MutableList<String>, contentBudget: Int): String {

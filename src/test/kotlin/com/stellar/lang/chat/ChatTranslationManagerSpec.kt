@@ -91,7 +91,8 @@ class ChatTranslationManagerSpec : FunSpec({
         TranslationService.putCache(fakeResult)
 
         val resultComp = ChatTranslationManager.processIncomingMessage(msg)
-        resultComp.string shouldContain "[T] "
+        val frFlag = com.stellar.lang.badge.LanguageFlagHelper.getFlagChar("fr")
+        resultComp.string shouldContain "$frFlag "
         resultComp.string shouldContain "Hello my friend"
     }
 
@@ -106,7 +107,8 @@ class ChatTranslationManagerSpec : FunSpec({
         TranslationService.putCache(fakeResult)
 
         val withBadge = ChatTranslationManager.processIncomingMessage(Component.literal("Hola a todos"))
-        withBadge.string shouldContain "[T] "
+        val esFlag = com.stellar.lang.badge.LanguageFlagHelper.getFlagChar("es")
+        withBadge.string shouldContain "$esFlag "
 
         val tracked = ChatTranslationManager.TrackedChatMessage(12_345L, msg, "Hola a todos")
         val mapField = ChatTranslationManager::class.java.getDeclaredField("trackedMessages")
@@ -341,7 +343,7 @@ class ChatTranslationManagerSpec : FunSpec({
             payload.messageText,
             payload.prefixComponent,
         )
-        failedComp.string shouldBe "[T] <\uFFFCPorkyoot> Bonjour"
+        failedComp.string shouldBe "<\uFFFCPorkyoot> Bonjour"
         failedComp.string shouldNotContain "BonjourBonjour"
 
         val translatingComp = ChatTranslationManager.createTranslatingComponent(
@@ -389,7 +391,8 @@ class ChatTranslationManagerSpec : FunSpec({
         TranslationService.putCache(fakeResult)
 
         val result = ChatTranslationManager.processIncomingMessage(incoming)
-        result.string shouldContain "[T] "
+        val frFlag = com.stellar.lang.badge.LanguageFlagHelper.getFlagChar("fr")
+        result.string shouldContain "$frFlag "
         result.string shouldContain "<[Porkyoot head]Porkyoot> "
         result.string shouldContain "I found a spawner"
     }
@@ -453,7 +456,8 @@ class ChatTranslationManagerSpec : FunSpec({
     test("createTranslatedComponent with default prefix and isMatchingMessage edge cases") {
         val fakeResult = TranslationResult("Bonjour", "Hello", "fr", "en", false)
         val comp = ChatTranslationManager.createTranslatedComponent(999L, fakeResult)
-        comp.string shouldContain "[T] "
+        val frFlag = com.stellar.lang.badge.LanguageFlagHelper.getFlagChar("fr")
+        comp.string shouldContain "$frFlag "
         comp.string shouldContain "Hello"
 
         val tracked = ChatTranslationManager.TrackedChatMessage(
@@ -521,14 +525,10 @@ class ChatTranslationManagerSpec : FunSpec({
         payload.messageText shouldBe "<Player>"
     }
 
-    test("createFailedComponent generates red strikethrough bold badge") {
+    test("createFailedComponent generates component without badge") {
         val comp = ChatTranslationManager.createFailedComponent(123L, "Untranslatable text")
-        comp.string shouldContain "[T] "
-        comp.string shouldContain "Untranslatable text"
-        val badge = comp.siblings.first()
-        badge.style.color shouldBe TextColor.fromLegacyFormat(ChatFormatting.RED)
-        badge.style.isBold shouldBe true
-        badge.style.isStrikethrough shouldBe true
+        comp.string shouldNotContain "[T]"
+        comp.string shouldBe "Untranslatable text"
     }
 
     test("processIncomingMessage marks chat message failed when translation fails") {
@@ -549,11 +549,8 @@ class ChatTranslationManagerSpec : FunSpec({
 
         val failedComp = refreshedTracked?.translatedComponent
         failedComp shouldNotBe null
-        failedComp!!.string shouldContain "[T] "
-        failedComp.string shouldContain "Bonjour les amis"
-        val badge = failedComp.siblings.first()
-        badge.style.color shouldBe TextColor.fromLegacyFormat(ChatFormatting.RED)
-        badge.style.isStrikethrough shouldBe true
+        failedComp!!.string shouldNotContain "[T]"
+        failedComp.string shouldBe "Bonjour les amis"
     }
 
     test("createFailedComponent with prefix component attaches prefix cleanly") {
@@ -570,11 +567,8 @@ class ChatTranslationManagerSpec : FunSpec({
 
         val input = Component.literal("Echec immediat")
         val resultComp = ChatTranslationManager.processIncomingMessage(input)
-        resultComp.string shouldContain "[T] "
-        resultComp.string shouldContain "Echec immediat"
-        val badge = resultComp.siblings.first()
-        badge.style.color shouldBe TextColor.fromLegacyFormat(ChatFormatting.RED)
-        badge.style.isStrikethrough shouldBe true
+        resultComp.string shouldNotContain "[T]"
+        resultComp.string shouldBe "Echec immediat"
     }
 
     test("scheduleChatRefresh falls back to custom minecraftExecutor and chatAccessorProvider") {
@@ -679,7 +673,8 @@ class ChatTranslationManagerSpec : FunSpec({
             fakeResult,
             payload.prefixComponent,
         )
-        translated.string shouldBe "[T] <Player> Bonjour"
+        val enFlag = com.stellar.lang.badge.LanguageFlagHelper.getFlagChar("en")
+        translated.string shouldBe "$enFlag <Player> Bonjour"
         translated.string shouldNotContain "HelloHello"
     }
 
@@ -712,12 +707,9 @@ class ChatTranslationManagerSpec : FunSpec({
         tracked.isPending shouldBe false
         tracked.translatedComponent shouldNotBe null
         val failed = tracked.translatedComponent!!
-        failed.string shouldContain "[T] "
-        failed.string shouldContain "<Player> Slow translation"
+        failed.string shouldNotContain "[T]"
+        failed.string shouldBe "<Player> Slow translation"
         failed.string shouldNotContain "Slow translationSlow translation"
-        val badge = failed.siblings.first()
-        badge.style.color shouldBe TextColor.fromLegacyFormat(ChatFormatting.RED)
-        badge.style.isStrikethrough shouldBe true
         TranslationService.isFailed("Slow translation") shouldBe true
     }
 
@@ -875,7 +867,8 @@ class ChatTranslationManagerSpec : FunSpec({
 
         ChatTranslationManager.handleTimeout(tracked, tracked.currentAttempt)
         refreshed shouldBe true
-        tracked.translatedComponent!!.string shouldContain "[T] "
+        tracked.translatedComponent!!.string shouldNotContain "[T]"
+        tracked.translatedComponent!!.string shouldContain "Timeout trigger test"
 
         ChatTranslationManager.timeoutExecutor = origExecutor
         customExecutor.shutdownNow()

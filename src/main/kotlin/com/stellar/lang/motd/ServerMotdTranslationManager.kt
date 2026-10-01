@@ -2,7 +2,6 @@ package com.stellar.lang.motd
 
 import com.stellar.lang.badge.TranslationBadgeHelper
 import com.stellar.lang.service.TranslationService
-import net.minecraft.ChatFormatting
 import net.minecraft.client.multiplayer.ServerData
 import net.minecraft.network.chat.Component
 import java.util.Collections
@@ -78,7 +77,7 @@ object ServerMotdTranslationManager {
         val cached = TranslationService.getCached(originalText, targetLang) ?: return false
 
         if (!cached.isSameLanguage) {
-            val translatedComp = buildMotdComponent(cached.translatedText, original)
+            val translatedComp = buildMotdComponent(cached.translatedText, original, cached.detectedLanguage)
             translatedMotds[serverData] = translatedComp
             serverData.motd = translatedComp
         }
@@ -95,14 +94,18 @@ object ServerMotdTranslationManager {
         TranslationService.translateAsync(originalText) { result ->
             pendingTranslations.remove(originalText)
             if (result != null && !result.isSameLanguage) {
-                val translatedComp = buildMotdComponent(result.translatedText, original)
+                val translatedComp = buildMotdComponent(result.translatedText, original, result.detectedLanguage)
                 translatedMotds[serverData] = translatedComp
                 serverData.motd = translatedComp
             }
         }
     }
 
-    private fun buildMotdComponent(translatedText: String, original: Component): Component {
+    private fun buildMotdComponent(
+        translatedText: String,
+        original: Component,
+        lang: String? = null,
+    ): Component {
         val isHidden = TranslationBadgeHelper.isHidden()
         val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(
             translatedText,
@@ -111,7 +114,7 @@ object ServerMotdTranslationManager {
         if (isHidden) {
             return textComp
         }
-        val badge = Component.literal("[T] ").withStyle(ChatFormatting.AQUA, ChatFormatting.BOLD)
+        val badge = TranslationBadgeHelper.createBadge(lang = lang, failed = false, trailingSpace = true)
         return Component.empty().append(badge).append(textComp)
     }
 

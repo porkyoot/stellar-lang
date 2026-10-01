@@ -99,7 +99,8 @@ object ItemTranslationManager {
 
         val text = com.stellar.lang.format.FormattingTagHelper.componentToFormattedText(original).trim()
         val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(text)
-        val isBadgePrefix = clean.startsWith("[T]") || clean.startsWith("[...]")
+        val isBadgePrefix = clean.startsWith("[T]") || clean.startsWith("[...]") ||
+            com.stellar.lang.badge.LanguageFlagHelper.isFlagPrefix(clean)
         return if (clean.length < MIN_TRANSLATABLE_LENGTH || isBadgePrefix) null else text
     }
 
@@ -113,7 +114,7 @@ object ItemTranslationManager {
         val cachedResult = TranslationService.getCached(plainText, targetLang)
         if (cachedResult != null) {
             if (cachedResult.isSameLanguage) return original
-            val comp = createFormattedName(cachedResult.translatedText)
+            val comp = createFormattedName(cachedResult.translatedText, cachedResult.detectedLanguage)
             failedItems.remove(cacheKey)
             itemCache[cacheKey] = comp
             return comp
@@ -128,7 +129,7 @@ object ItemTranslationManager {
                 TranslationService.translateAsync(plainText, forceRetry = true) { result ->
                     if (result != null && !result.isSameLanguage) {
                         failedItems.remove(cacheKey)
-                        itemCache[cacheKey] = createFormattedName(result.translatedText)
+                        itemCache[cacheKey] = createFormattedName(result.translatedText, result.detectedLanguage)
                     } else if (result != null && result.isSameLanguage) {
                         failedItems.remove(cacheKey)
                         itemCache.remove(cacheKey)
@@ -145,7 +146,7 @@ object ItemTranslationManager {
         TranslationService.translateAsync(plainText) { result ->
             if (result != null && !result.isSameLanguage) {
                 failedItems.remove(cacheKey)
-                itemCache[cacheKey] = createFormattedName(result.translatedText)
+                itemCache[cacheKey] = createFormattedName(result.translatedText, result.detectedLanguage)
             } else if (result != null && result.isSameLanguage) {
                 failedItems.remove(cacheKey)
                 itemCache.remove(cacheKey)
@@ -157,8 +158,12 @@ object ItemTranslationManager {
         return original
     }
 
-    private fun createFormattedName(translatedText: String): MutableComponent {
-        val badge = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(failed = false, trailingSpace = true)
+    private fun createFormattedName(translatedText: String, lang: String? = null): MutableComponent {
+        val badge = com.stellar.lang.badge.TranslationBadgeHelper.createBadge(
+            lang = lang,
+            failed = false,
+            trailingSpace = true,
+        )
         val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(translatedText)
         return Component.empty().append(badge).append(textComp)
     }

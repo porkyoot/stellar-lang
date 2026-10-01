@@ -28,13 +28,13 @@ Supporting **ONNX Runtime (Local Offline)**, **DeepL (Official API)**, and **Lib
 ## ⚙️ Core Features
 
 ### 💬 Chat Translation
-* **Interactive `[T]` Badge:** Cyan prefix attached to translated chat messages.
-* **Hover Inspection:** Hover over `[T]` to view the original text and detected source language.
-* **In-Place Toggle:** Click `[T]` to switch between translated and original text in-place.
-* **Smart Detection:** Automatically avoids translating text that is already in your target language.
+* **Interactive Pixel Flag Badge:** Crisp Minecrafty pixel-art flag prefix matching the detected source language (mapped to country flags across ISO languages, with a globe fallback) attached to translated chat messages.
+* **Hover Inspection:** Hover over the flag badge to view the original text, country emoji, and detected language name.
+* **In-Place Toggle:** Click the flag badge to switch between translated and original text in-place.
+* **Smart Detection:** Automatically avoids translating text that is already in your target language. Untranslated or failed translations display cleanly with no indicator badge.
 
 ### 📖 Multi-Page Book Translation
-* **Side-by-Side Dual Book View:** When opening a book whose detected language is not the player's target language, a non-editable, wider and bigger translated book is displayed alongside the original book with "Original" and "[T] Translated (<LANG>)" headers.
+* **Side-by-Side Dual Book View:** When opening a book whose detected language is not the player's target language, a non-editable, wider and bigger translated book is displayed alongside the original book with "Original" and translated headers.
 * **Overflow & Mouse Wheel Scrolling:** Supports wider text wrapping, renders beyond vanilla's 14-line limit, and allows scrolling with the mouse wheel so overflowing translated text is never truncated.
 * **Synchronized Pagination:** Turning pages via buttons or arrow keys flips both books simultaneously.
 * **Centered Vanilla Fallback:** When a book is already in the target language (or empty), the standard centered vanilla book view is preserved with no extra UI.
@@ -44,7 +44,7 @@ Supporting **ONNX Runtime (Local Offline)**, **DeepL (Official API)**, and **Lib
 * **Original Text Peek:** Hold the configured hotkey (default: `,` comma) to instantly reveal the original sign text and nametags in-world.
 
 ### 🏷️ Entity & Item Name Translation
-* Custom nametags on entities and item hover tooltips are translated automatically with a subtle `[T]` indicator.
+* Custom nametags on entities, server MOTDs, map banners, and item hover tooltips are translated automatically with a subtle pixel flag indicator. Untranslated or failed entries show clean original text with no badge.
 
 ### 📦 Container & Inventory Label Translation
 * Automatically translates container titles (chests, barrels, furnaces, shulkers, hoppers, dispensers, etc.) and inventory labels **if and only if** they have been player-renamed and are not in the target language.

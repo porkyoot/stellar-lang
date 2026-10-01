@@ -1,5 +1,6 @@
 package com.stellar.lang.book
 
+import com.stellar.lang.StellarLangMod
 import net.minecraft.ChatFormatting
 import net.minecraft.client.gui.Font
 import net.minecraft.client.gui.GuiGraphicsExtractor
@@ -10,33 +11,36 @@ import net.minecraft.client.renderer.RenderPipelines
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.ComponentUtils
 import net.minecraft.network.chat.Style
+import net.minecraft.resources.Identifier
 
 private const val BOOK_IMAGE_WIDTH = 192
 private const val BOOK_IMAGE_HEIGHT = 192
 private const val BOOK_TEXTURE_WIDTH = 256
 private const val BOOK_TEXTURE_HEIGHT = 256
-private const val PAGE_TEXT_X = 34
+private const val PAGE_TEXT_X = 48
 private const val PAGE_TEXT_Y = 30
-private const val PAGE_NUM_RIGHT_X = 148
+private const val PAGE_MARGIN_RIGHT = 56
+private const val PAGE_NUM_MARGIN_RIGHT = 56
 private const val PAGE_NUM_Y = 16
-private const val WRAP_WIDTH = 126
 private const val LINE_HEIGHT = 9
-private const val MAX_VISIBLE_LINES = 16
+private const val MAX_VISIBLE_LINES = 14
 private const val BLACK_COLOR = -16_777_216
 private const val GRAY_COLOR = 0x555555
 private const val SUBTLE_GRAY_COLOR = 0x777777
-private const val INDICATOR_Y = 175
-private const val PREVIEW_SCALE_X = 1.20f
-private const val PREVIEW_SCALE_Y = 1.16f
-private const val HALF_PAGE = 96
+private const val INDICATOR_MARGIN_BOTTOM = 22
+private const val MIN_WRAP_WIDTH = 100
 
 /**
  * Layout constants for the dual book display used by BookViewScreenMixin.
  */
 internal object BookLayoutConstants {
+    val TRANSLATED_BOOK_LOCATION: Identifier = Identifier.fromNamespaceAndPath(
+        StellarLangMod.MOD_ID,
+        "textures/gui/book_translated.png",
+    )
     const val BOOK_IMAGE_WIDTH = 192
-    const val PREVIEW_SCALE_X = 1.20f
-    const val PREVIEW_SCALE_Y = 1.16f
+    const val PREVIEW_SCALE_X = 1.28f
+    const val PREVIEW_SCALE_Y = 1.0f
     const val MIN_HEADER_Y = 4
     const val HEADER_OFFSET_Y = 12
     const val MIN_SCREEN_HEIGHT_FOR_HEADER = 240
@@ -50,17 +54,23 @@ internal object BookLayoutConstants {
     const val SCREEN_HALF_DIVISOR = 2.0f
     const val SCREEN_QUARTER_DIVISOR = 4.0f
     const val HALF_ORIGINAL_BOOK = 96
-    const val MIN_OFFSET = 95f
-    const val MAX_OFFSET = 130f
-    const val OFFSET_WIDTH_MARGIN = 115f
+    const val MIN_OFFSET = 100f
+    const val MAX_OFFSET = 135f
+    const val OFFSET_WIDTH_MARGIN = 126f
     const val MIN_OFFSET_FALLBACK = 60f
     const val TOP_MARGIN_WITH_HEADER = 16
     const val BOOK_RETRY_INTERVAL_MS = 15_000L
+    const val BOOK_MAX_RETRY_COOLDOWN_MS = 120_000L
+
+    fun getBookRetryIntervalMs(failureCount: Int): Long {
+        val factor = 1L shl (failureCount - 1).coerceAtLeast(0)
+        return (BOOK_RETRY_INTERVAL_MS * factor).coerceAtMost(BOOK_MAX_RETRY_COOLDOWN_MS)
+    }
 }
 
 /**
  * Non-editable translated book widget rendered on the side of BookViewScreen.
- * Supports wider pages, overflow display, and mouse wheel scrolling.
+ * Supports wider pages, unscaled standard text size matching original books, and mouse wheel scrolling.
  */
 @Suppress("LongParameterList")
 class TranslatedBookWidget(
@@ -76,20 +86,24 @@ class TranslatedBookWidget(
     var scrollOffset: Int = 0
     private var lastRenderedPage: Int = -1
 
+    private fun getWrapWidth(): Int = (this.width - PAGE_TEXT_X - PAGE_MARGIN_RIGHT).coerceAtLeast(MIN_WRAP_WIDTH)
+    private fun getPageNumRightX(): Int = this.width - PAGE_NUM_MARGIN_RIGHT
+    private fun getIndicatorY(): Int = this.height - INDICATOR_MARGIN_BOTTOM
+
     override fun extractWidgetRenderState(
         extractor: GuiGraphicsExtractor,
         mouseX: Int,
         mouseY: Int,
         partialTick: Float,
     ) {
+        // 1. Draw translated book background texture scaled wider
         extractor.pose().pushMatrix()
         extractor.pose().translate(this.x.toFloat(), this.y.toFloat())
-        extractor.pose().scale(PREVIEW_SCALE_X, PREVIEW_SCALE_Y)
+        extractor.pose().scale(BookLayoutConstants.PREVIEW_SCALE_X, BookLayoutConstants.PREVIEW_SCALE_Y)
 
-        // Draw translated book background texture
         extractor.blit(
             RenderPipelines.GUI_TEXTURED,
-            BookViewScreen.BOOK_LOCATION,
+            BookLayoutConstants.TRANSLATED_BOOK_LOCATION,
             0,
             0,
             0.0f,
@@ -99,13 +113,20 @@ class TranslatedBookWidget(
             BOOK_TEXTURE_WIDTH,
             BOOK_TEXTURE_HEIGHT,
         )
+        extractor.pose().popMatrix()
+
+        // 2. Draw page contents at 1.0 font scale (same as original book)
+        extractor.pose().pushMatrix()
+        extractor.pose().translate(this.x.toFloat(), this.y.toFloat())
 
         val access = translatedAccessSupplier()
         if (access == null) {
             if (isTranslatingSupplier()) {
                 val loadingMsg = Component.literal("...").withStyle(ChatFormatting.GRAY)
                 val msgWidth = font.width(loadingMsg)
-                extractor.text(font, loadingMsg, HALF_PAGE - msgWidth / 2, HALF_PAGE, SUBTLE_GRAY_COLOR, false)
+                val posX = this.width / 2 - msgWidth / 2
+                val posY = this.height / 2
+                extractor.text(font, loadingMsg, posX, posY, SUBTLE_GRAY_COLOR, false)
             }
             extractor.pose().popMatrix()
             return
@@ -127,7 +148,7 @@ class TranslatedBookWidget(
         // Draw page indicator
         val pageMsg = Component.translatable("book.pageIndicator", currentPage + 1, totalPages.coerceAtLeast(1))
         val pageMsgWidth = font.width(pageMsg)
-        extractor.text(font, pageMsg, PAGE_NUM_RIGHT_X - pageMsgWidth, PAGE_NUM_Y, GRAY_COLOR, false)
+        extractor.text(font, pageMsg, getPageNumRightX() - pageMsgWidth, PAGE_NUM_Y, GRAY_COLOR, false)
 
         if (currentPage in 0 until totalPages) {
             renderTranslatedLines(extractor, access.getPage(currentPage))
@@ -137,7 +158,7 @@ class TranslatedBookWidget(
     private fun renderTranslatedLines(extractor: GuiGraphicsExtractor, pageComp: Component) {
         val pageStyle = Style.EMPTY.withoutShadow().withColor(BLACK_COLOR)
         val styledComp = ComponentUtils.mergeStyles(pageComp, pageStyle)
-        val lines = font.split(styledComp, WRAP_WIDTH)
+        val lines = font.split(styledComp, getWrapWidth())
 
         val maxScroll = (lines.size - MAX_VISIBLE_LINES).coerceAtLeast(0)
         val startLine = scrollOffset.coerceIn(0, maxScroll)
@@ -153,7 +174,7 @@ class TranslatedBookWidget(
             val endLine = (startLine + MAX_VISIBLE_LINES).coerceAtMost(lines.size)
             val indicator = "↕ ${startLine + 1}-$endLine/${lines.size}"
             val indWidth = font.width(indicator)
-            extractor.text(font, indicator, PAGE_NUM_RIGHT_X - indWidth, INDICATOR_Y, SUBTLE_GRAY_COLOR, false)
+            extractor.text(font, indicator, getPageNumRightX() - indWidth, getIndicatorY(), SUBTLE_GRAY_COLOR, false)
         }
     }
 
@@ -171,7 +192,7 @@ class TranslatedBookWidget(
         val pageComp = access.getPage(page)
         val pageStyle = Style.EMPTY.withoutShadow().withColor(BLACK_COLOR)
         val styledComp = ComponentUtils.mergeStyles(pageComp, pageStyle)
-        val lines = font.split(styledComp, WRAP_WIDTH)
+        val lines = font.split(styledComp, getWrapWidth())
         val maxScroll = (lines.size - MAX_VISIBLE_LINES).coerceAtLeast(0)
 
         if (maxScroll > 0) {

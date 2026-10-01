@@ -1,5 +1,6 @@
 package com.stellar.lang.service
 
+import com.stellar.lang.badge.LanguageFlagHelper
 import com.stellar.lang.chat.ChatTranslationManager
 import com.stellar.lang.entity.EntityTranslationManager
 import com.stellar.lang.item.ItemTranslationManager
@@ -137,7 +138,7 @@ class TranslationRetrySpec : FunSpec({
 
         refreshed shouldBe true
         tracked.translatedComponent!!.string.contains("Hello world") shouldBe true
-        tracked.translatedComponent!!.string.contains("[T]") shouldBe true
+        tracked.translatedComponent!!.string.contains(LanguageFlagHelper.getFlagChar("fr").toString()) shouldBe true
 
         // Same language result is ignored
         val sameRes = TranslationResult(
@@ -424,7 +425,7 @@ class TranslationRetrySpec : FunSpec({
             itemKey,
             itemComp,
         ) as Component
-        throttledItem.string shouldBe "[T] $itemText"
+        throttledItem.string shouldBe itemText
 
         val entityText = "Zombie cooldown"
         val entityKey = "$targetLang::$entityText"
@@ -456,7 +457,7 @@ class TranslationRetrySpec : FunSpec({
             entityKey,
             entityComp,
         ) as Component
-        throttledEntity.string shouldBe "[T] $entityText"
+        throttledEntity.string shouldBe entityText
 
         val signText = SignText().setMessage(0, Component.literal("Panneau cooldown"))
         val signSentence = "Panneau cooldown"
@@ -886,5 +887,64 @@ class TranslationRetrySpec : FunSpec({
         } finally {
             config.translationPlugin.setValue("onnx", false)
         }
+    }
+
+    test("TranslationCache exponential backoff scales with consecutive failures and caps at MAX_COOLDOWN_MS") {
+        val key = "en::test_backoff"
+        TranslationCache.removeFailed(key)
+
+        TranslationCache.getFailureCount(key) shouldBe 0
+        TranslationCache.getCooldownMs(key) shouldBe TranslationCache.ERROR_COOLDOWN_MS
+
+        TranslationCache.markFailed(key)
+        TranslationCache.getFailureCount(key) shouldBe 1
+        TranslationCache.getCooldownMs(key) shouldBe 15_000L
+
+        TranslationCache.markFailed(key)
+        TranslationCache.getFailureCount(key) shouldBe 2
+        TranslationCache.getCooldownMs(key) shouldBe 30_000L
+
+        TranslationCache.markFailed(key)
+        TranslationCache.getFailureCount(key) shouldBe 3
+        TranslationCache.getCooldownMs(key) shouldBe 60_000L
+
+        TranslationCache.markFailed(key)
+        TranslationCache.getFailureCount(key) shouldBe 4
+        TranslationCache.getCooldownMs(key) shouldBe 120_000L
+
+        TranslationCache.markFailed(key)
+        TranslationCache.getFailureCount(key) shouldBe 5
+        TranslationCache.getCooldownMs(key) shouldBe 240_000L
+
+        TranslationCache.markFailed(key)
+        TranslationCache.getFailureCount(key) shouldBe 6
+        TranslationCache.getCooldownMs(key) shouldBe 300_000L
+
+        // Cooldown remains capped at MAX_COOLDOWN_MS (300_000L)
+        TranslationCache.markFailed(key)
+        TranslationCache.getCooldownMs(key) shouldBe TranslationCache.MAX_COOLDOWN_MS
+
+        // Success cleans up failed attempts and failure count
+        TranslationCache.put(
+            TranslationResult(
+                originalText = "test_backoff",
+                translatedText = "test_backoff_trans",
+                detectedLanguage = "fr",
+                targetLanguage = "en",
+                isSameLanguage = false,
+            ),
+        )
+        TranslationCache.getFailureCount(key) shouldBe 0
+        TranslationCache.getCooldownMs(key) shouldBe TranslationCache.ERROR_COOLDOWN_MS
+        TranslationCache.isThrottled(key) shouldBe false
+    }
+
+    test("BookLayoutConstants getBookRetryIntervalMs applies exponential backoff capped at max") {
+        com.stellar.lang.book.BookLayoutConstants.getBookRetryIntervalMs(0) shouldBe 15_000L
+        com.stellar.lang.book.BookLayoutConstants.getBookRetryIntervalMs(1) shouldBe 15_000L
+        com.stellar.lang.book.BookLayoutConstants.getBookRetryIntervalMs(2) shouldBe 30_000L
+        com.stellar.lang.book.BookLayoutConstants.getBookRetryIntervalMs(3) shouldBe 60_000L
+        com.stellar.lang.book.BookLayoutConstants.getBookRetryIntervalMs(4) shouldBe 120_000L
+        com.stellar.lang.book.BookLayoutConstants.getBookRetryIntervalMs(5) shouldBe 120_000L
     }
 })

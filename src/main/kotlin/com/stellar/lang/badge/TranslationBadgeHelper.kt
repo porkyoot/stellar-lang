@@ -13,20 +13,22 @@ object TranslationBadgeHelper {
     const val INDICATOR_FAILED_COLOR: Int = 0xFF5555
     const val INDICATOR_TRANSLATING_COLOR: Int = 0xAAAAAA
 
-    fun isHidden(): Boolean = runCatching {
+    fun isHidden(): Boolean =
         TranslationService.getConfig().hideIndicators.value()
-    }.getOrDefault(false)
 
-    fun createBadge(failed: Boolean): MutableComponent = createBadge(failed, true)
+    fun createBadge(failed: Boolean): MutableComponent =
+        createBadge(lang = null, failed = failed, trailingSpace = true)
 
-    fun createBadge(failed: Boolean, trailingSpace: Boolean): MutableComponent {
-        if (isHidden()) return Component.empty()
-        val text = if (trailingSpace) "[T] " else "[T]"
-        return if (failed) {
-            Component.literal(text).withStyle(ChatFormatting.RED, ChatFormatting.STRIKETHROUGH, ChatFormatting.BOLD)
-        } else {
-            Component.literal(text).withStyle(ChatFormatting.AQUA, ChatFormatting.BOLD)
-        }
+    fun createBadge(failed: Boolean, trailingSpace: Boolean): MutableComponent =
+        createBadge(lang = null, failed = failed, trailingSpace = trailingSpace)
+
+    fun createBadge(
+        lang: String?,
+        failed: Boolean = false,
+        trailingSpace: Boolean = true,
+    ): MutableComponent {
+        if (failed || isHidden()) return Component.empty()
+        return LanguageFlagHelper.createFlagBadge(lang, trailingSpace)
     }
 
     fun createTranslatingBadge(trailingSpace: Boolean = true): MutableComponent {

@@ -1,5 +1,6 @@
 package com.stellar.lang.motd
 
+import com.stellar.lang.badge.LanguageFlagHelper
 import com.stellar.lang.service.TranslationCache
 import com.stellar.lang.service.TranslationResult
 import com.stellar.lang.service.TranslationService
@@ -65,7 +66,7 @@ class ServerMotdTranslationManagerSpec : FunSpec({
         data.motd = Component.literal(original)
 
         ServerMotdTranslationManager.processMotd(data)
-        data.motd.string shouldContain "[T] "
+        data.motd.string shouldContain LanguageFlagHelper.getFlagChar("en").toString()
         data.motd.string shouldContain "Bienvenue sur notre serveur !"
         ServerMotdTranslationManager.getOriginalMotd(data)?.string shouldBe original
     }

@@ -6,26 +6,29 @@ import net.minecraft.ChatFormatting
 import net.minecraft.network.chat.TextColor
 
 class TranslationBadgeHelperSpec : FunSpec({
-    test("createBadge creates cyan bold badge when not failed") {
+    test("createBadge creates flag badge when not failed") {
         val badge = TranslationBadgeHelper.createBadge(failed = false, trailingSpace = true)
-        badge.string shouldBe "[T] "
-        badge.style.color shouldBe TextColor.fromLegacyFormat(ChatFormatting.AQUA)
-        badge.style.isBold shouldBe true
-        badge.style.isStrikethrough shouldBe false
+        badge.string shouldBe "${LanguageFlagHelper.FALLBACK_CHAR} "
 
         val defaultBadge = TranslationBadgeHelper.createBadge(failed = false)
-        defaultBadge.string shouldBe "[T] "
+        defaultBadge.string shouldBe "${LanguageFlagHelper.FALLBACK_CHAR} "
+
+        val frBadge = TranslationBadgeHelper.createBadge(lang = "fr", failed = false, trailingSpace = true)
+        frBadge.string shouldBe "${LanguageFlagHelper.getFlagChar("fr")} "
+
+        val noSpaceBadge = TranslationBadgeHelper.createBadge(lang = "fr", failed = false, trailingSpace = false)
+        noSpaceBadge.string shouldBe "${LanguageFlagHelper.getFlagChar("fr")}"
     }
 
-    test("createBadge creates red bold strikethrough badge when failed") {
+    test("createBadge returns empty component when failed") {
         val badge = TranslationBadgeHelper.createBadge(failed = true, trailingSpace = false)
-        badge.string shouldBe "[T]"
-        badge.style.color shouldBe TextColor.fromLegacyFormat(ChatFormatting.RED)
-        badge.style.isBold shouldBe true
-        badge.style.isStrikethrough shouldBe true
+        badge.string shouldBe ""
 
         val defaultFailedBadge = TranslationBadgeHelper.createBadge(failed = true)
-        defaultFailedBadge.string shouldBe "[T] "
+        defaultFailedBadge.string shouldBe ""
+
+        val langFailedBadge = TranslationBadgeHelper.createBadge(lang = "fr", failed = true)
+        langFailedBadge.string shouldBe ""
     }
 
     test("createTranslatingBadge creates gray badge") {
@@ -50,11 +53,25 @@ class TranslationBadgeHelperSpec : FunSpec({
         try {
             TranslationBadgeHelper.isHidden() shouldBe true
             TranslationBadgeHelper.createBadge(failed = false).string shouldBe ""
+            TranslationBadgeHelper.createBadge(lang = "fr", failed = false).string shouldBe ""
             TranslationBadgeHelper.createBadge(failed = true, trailingSpace = false).string shouldBe ""
             TranslationBadgeHelper.createTranslatingBadge(trailingSpace = true).string shouldBe ""
             TranslationBadgeHelper.createTranslatingBadge(trailingSpace = false).string shouldBe ""
         } finally {
             config.hideIndicators.setValue(false, false)
         }
+    }
+
+    test("default arguments and normal isHidden state") {
+        TranslationBadgeHelper.isHidden() shouldBe false
+
+        val badgeDefault = TranslationBadgeHelper.createBadge("fr")
+        badgeDefault.string shouldBe "${LanguageFlagHelper.getFlagChar("fr")} "
+
+        val badgeDefaultTrailing = TranslationBadgeHelper.createBadge("fr", failed = false)
+        badgeDefaultTrailing.string shouldBe "${LanguageFlagHelper.getFlagChar("fr")} "
+
+        val translatingDefault = TranslationBadgeHelper.createTranslatingBadge()
+        translatingDefault.string shouldBe "[...] "
     }
 })

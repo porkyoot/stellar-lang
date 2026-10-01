@@ -1,5 +1,6 @@
 package com.stellar.lang.map
 
+import com.stellar.lang.badge.LanguageFlagHelper
 import com.stellar.lang.input.StellarLangInputHandler
 import com.stellar.lang.service.TranslationCache
 import com.stellar.lang.service.TranslationResult
@@ -8,6 +9,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import net.minecraft.client.multiplayer.ClientLevel
 import net.minecraft.core.Holder
 import net.minecraft.core.component.DataComponentMap
@@ -146,7 +148,7 @@ class MapBannerTranslationManagerSpec : FunSpec({
         )
 
         val result = MapBannerTranslationManager.translateBannerName(original)
-        result.string shouldContain "[T]"
+        result.string shouldContain LanguageFlagHelper.getFlagChar("fr").toString()
         result.string shouldContain "Watchtower"
 
         // Cache hit
@@ -169,7 +171,8 @@ class MapBannerTranslationManagerSpec : FunSpec({
         MapBannerTranslationManager.failedBanners.add(textKey)
 
         val failedResult = MapBannerTranslationManager.translateBannerName(original)
-        failedResult.string shouldContain "[T]"
+        failedResult.string shouldNotContain "[T]"
+        LanguageFlagHelper.isFlagPrefix(failedResult.string) shouldBe false
         failedResult.string shouldContain text
 
         // Simulate cooldown expiry
@@ -257,7 +260,8 @@ class MapBannerTranslationManagerSpec : FunSpec({
         MapBannerTranslationManager.refreshBanner(textFail)
         TranslationCache.completeInFlight(failKey, null)
         MapBannerTranslationManager.failedBanners.contains(failTextKey) shouldBe true
-        MapBannerTranslationManager.textComponentCache[failTextKey]?.string shouldContain "[T]"
+        MapBannerTranslationManager.textComponentCache[failTextKey]?.string shouldNotContain "[T]"
+        MapBannerTranslationManager.textComponentCache[failTextKey]?.string shouldBe textFail
     }
 
     test("requestTranslation async callback updates cache on success and failure") {

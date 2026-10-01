@@ -42,7 +42,7 @@ object SignTooltipRenderer {
     private const val NAMETAG_LINE_HEIGHT = 10
     private const val INDICATOR_STANDING_Y = 24f
     private const val INDICATOR_HANGING_Y = -26f
-    private const val INDICATOR_COLOR = 0xFF55FFFF.toInt()
+    private const val INDICATOR_DEFAULT_COLOR = 0xFFFFFFFF.toInt()
     private const val INDICATOR_FAILED_COLOR = 0xFFFF5555.toInt()
     private const val INDICATOR_TRANSLATING_COLOR = 0xFFAAAAAA.toInt()
 
@@ -134,8 +134,18 @@ object SignTooltipRenderer {
 
         if (!isPlayerLookingAtSign(state, mc, config)) return
 
-        // 1. Display [T] on the visible face using the same system as sign text
-        renderSignIndicator(state, data, facingFront, poseStack, submitNodeCollector, mc, isFailed, isTranslating)
+        // 1. Display flag on the visible face using the same system as sign text
+        renderSignIndicator(
+            state,
+            data,
+            facingFront,
+            poseStack,
+            submitNodeCollector,
+            mc,
+            isFailed,
+            isTranslating,
+            activeOutcome?.detectedLanguage,
+        )
 
         // 2. Display nametag over the sign strictly on the visible face if text has overflow
         if (activeOutcome != null && activeOutcome.hasOverflow) {
@@ -162,11 +172,16 @@ object SignTooltipRenderer {
         mc: Minecraft,
         isFailed: Boolean = false,
         isTranslating: Boolean = false,
+        detectedLanguage: String? = null,
     ) {
         val indicator = if (isTranslating) {
             com.stellar.lang.badge.TranslationBadgeHelper.createTranslatingBadge(trailingSpace = false)
         } else {
-            com.stellar.lang.badge.TranslationBadgeHelper.createBadge(isFailed, trailingSpace = false)
+            com.stellar.lang.badge.TranslationBadgeHelper.createBadge(
+                lang = detectedLanguage,
+                failed = isFailed,
+                trailingSpace = false,
+            )
         }
         if (indicator.string.isEmpty()) return
 
@@ -183,7 +198,7 @@ object SignTooltipRenderer {
         val color = when {
             isTranslating -> INDICATOR_TRANSLATING_COLOR
             isFailed -> INDICATOR_FAILED_COLOR
-            else -> INDICATOR_COLOR
+            else -> INDICATOR_DEFAULT_COLOR
         }
 
         poseStack.pushPose()

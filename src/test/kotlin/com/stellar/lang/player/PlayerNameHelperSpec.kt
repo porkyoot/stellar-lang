@@ -1,5 +1,6 @@
 package com.stellar.lang.player
 
+import com.stellar.lang.badge.LanguageFlagHelper
 import com.stellar.lang.chat.ChatTranslationManager
 import com.stellar.lang.entity.EntityTranslationManager
 import com.stellar.lang.service.TranslationResult
@@ -189,6 +190,7 @@ class PlayerNameHelperSpec : FunSpec({
         // 1. When translatePlayerNames is false, player name is NOT translated
         val result = EntityTranslationManager.translateEntityName(null, orig)
         result shouldBe orig
+        LanguageFlagHelper.isFlagPrefix(result.string) shouldBe false
         result.string shouldNotContain "[T] "
 
         // 2. Non-player name IS translated
@@ -196,13 +198,13 @@ class PlayerNameHelperSpec : FunSpec({
         val mobResult = TranslationResult("Loup Sauvage", "Wild Wolf", "fr", "en", false)
         TranslationService.putCache(mobResult)
         val mobTranslated = EntityTranslationManager.translateEntityName(null, mobOrig)
-        mobTranslated.string shouldContain "[T] "
+        mobTranslated.string shouldContain LanguageFlagHelper.getFlagChar("fr").toString()
         mobTranslated.string shouldContain "Wild Wolf"
 
         // 3. When translatePlayerNames is true, player name IS translated
         config.translatePlayerNames.setValue(true, false)
         val playerTranslated = EntityTranslationManager.translateEntityName(null, orig)
-        playerTranslated.string shouldContain "[T] "
+        playerTranslated.string shouldContain LanguageFlagHelper.getFlagChar("fr").toString()
         playerTranslated.string shouldContain "RootOfTheDevil"
     }
 

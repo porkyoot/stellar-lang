@@ -10,6 +10,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 object SignEditPreviewManager {
     internal const val DEBOUNCE_MS = 250L
     internal const val FAILED_RETRY_COOLDOWN_MS = 5_000L
+    internal const val MAX_RETRY_COOLDOWN_MS = 60_000L
     internal const val PREVIEW_LINE_CHARS = 20
 
     @Volatile
@@ -21,17 +22,30 @@ object SignEditPreviewManager {
     @Volatile
     var currentTranslatedText: String = ""
 
+    @Volatile
+    var detectedLanguage: String? = null
+
     val isTranslating = AtomicBoolean(false)
     val hasFailed = AtomicBoolean(false)
     val isSameLanguage = AtomicBoolean(false)
+
+    @Volatile
+    var failureCount: Int = 0
+
+    fun getRetryCooldownMs(): Long {
+        val factor = 1L shl (failureCount - 1).coerceAtLeast(0)
+        return (FAILED_RETRY_COOLDOWN_MS * factor).coerceAtMost(MAX_RETRY_COOLDOWN_MS)
+    }
 
     fun clear() {
         lastRequestedText = ""
         lastRequestTime = 0L
         currentTranslatedText = ""
+        detectedLanguage = null
         isTranslating.set(false)
         hasFailed.set(false)
         isSameLanguage.set(false)
+        failureCount = 0
     }
 
     @Suppress("CognitiveComplexMethod")
@@ -47,9 +61,11 @@ object SignEditPreviewManager {
         val cached = TranslationService.getCached(trimmed, targetLang)
         if (cached != null) {
             currentTranslatedText = cached.translatedText
+            detectedLanguage = cached.detectedLanguage
             lastRequestedText = trimmed
             hasFailed.set(false)
             isSameLanguage.set(cached.isSameLanguage)
+            failureCount = 0
             return currentTranslatedText
         }
 
@@ -58,11 +74,12 @@ object SignEditPreviewManager {
         }
 
         val isFailedState = hasFailed.get()
-        val waitMs = if (isFailedState) FAILED_RETRY_COOLDOWN_MS else DEBOUNCE_MS
+        val waitMs = if (isFailedState) getRetryCooldownMs() else DEBOUNCE_MS
 
         if (trimmed != lastRequestedText) {
             lastRequestedText = trimmed
             lastRequestTime = System.currentTimeMillis()
+            failureCount = 0
         } else if (!isTranslating.get() && System.currentTimeMillis() - lastRequestTime >= waitMs) {
             lastRequestTime = System.currentTimeMillis()
             isTranslating.set(true)
@@ -71,11 +88,15 @@ object SignEditPreviewManager {
                 isTranslating.set(false)
                 if (result != null) {
                     currentTranslatedText = result.translatedText
+                    detectedLanguage = result.detectedLanguage
                     hasFailed.set(false)
                     isSameLanguage.set(result.isSameLanguage)
+                    failureCount = 0
                 } else {
                     hasFailed.set(true)
+                    detectedLanguage = null
                     isSameLanguage.set(false)
+                    failureCount++
                 }
             }
         }

@@ -8,6 +8,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import net.minecraft.ChatFormatting
 import net.minecraft.client.gui.screens.inventory.AbstractContainerScreen
 import net.minecraft.network.chat.Component
@@ -129,7 +130,8 @@ class ContainerTranslationManagerSpec : FunSpec({
         )
 
         val result = ContainerTranslationManager.translateLabel(frenchLabel)
-        result.string shouldContain "[T]"
+        val frFlag = com.stellar.lang.badge.LanguageFlagHelper.getFlagChar("fr")
+        result.string shouldContain "$frFlag"
         result.string shouldContain "Treasure Chest"
         result.siblings.last().style shouldBe frenchLabel.style
     }
@@ -191,7 +193,7 @@ class ContainerTranslationManagerSpec : FunSpec({
         ContainerTranslationManager.failedContainers.add(cacheKey)
 
         val failedResult = ContainerTranslationManager.translateLabel(label)
-        failedResult.string shouldContain "[T]"
+        failedResult.string shouldNotContain "[T]"
         failedResult.string shouldContain text
 
         // Trigger retry cooldown expiry
@@ -309,7 +311,8 @@ class ContainerTranslationManagerSpec : FunSpec({
         TranslationCache.markFailed(keyFail)
         TranslationCache.completeInFlight(keyFail, null)
         ContainerTranslationManager.failedContainers.contains(cacheKeyFail) shouldBe true
-        ContainerTranslationManager.containerCache[cacheKeyFail]?.string shouldContain "[T]"
+        ContainerTranslationManager.containerCache[cacheKeyFail]?.string shouldNotContain "[T]"
+        ContainerTranslationManager.containerCache[cacheKeyFail]?.string shouldBe textFail
     }
 
     test("handleRetryOrFailed and refreshContainer callbacks handle all branches") {

@@ -82,6 +82,8 @@ object MapBannerTranslationManager {
         val text = original.string.trim()
         val clean = if (text.startsWith("[T] ") || text.startsWith("[...] ")) {
             text.substring(BADGE_PREFIX_LENGTH).trim()
+        } else if (com.stellar.lang.badge.LanguageFlagHelper.isFlagPrefix(text)) {
+            com.stellar.lang.badge.LanguageFlagHelper.stripFlagPrefix(text).trim()
         } else {
             text
         }
@@ -154,7 +156,7 @@ object MapBannerTranslationManager {
         val cachedResult = TranslationService.getCached(plainText, targetLang)
         if (cachedResult != null) {
             if (cachedResult.isSameLanguage) return original
-            val comp = createFormattedName(cachedResult.translatedText)
+            val comp = createFormattedName(cachedResult.translatedText, cachedResult.detectedLanguage)
             failedBanners.remove(textKey)
             textComponentCache[textKey] = comp
             return comp
@@ -177,7 +179,7 @@ object MapBannerTranslationManager {
             TranslationService.translateAsync(plainText, forceRetry = true) { result ->
                 if (result != null && !result.isSameLanguage) {
                     failedBanners.remove(textKey)
-                    textComponentCache[textKey] = createFormattedName(result.translatedText)
+                    textComponentCache[textKey] = createFormattedName(result.translatedText, result.detectedLanguage)
                 } else if (result != null && result.isSameLanguage) {
                     failedBanners.remove(textKey)
                     textComponentCache.remove(textKey)
@@ -195,7 +197,7 @@ object MapBannerTranslationManager {
         TranslationService.translateAsync(plainText) { result ->
             if (result != null && !result.isSameLanguage) {
                 failedBanners.remove(textKey)
-                textComponentCache[textKey] = createFormattedName(result.translatedText)
+                textComponentCache[textKey] = createFormattedName(result.translatedText, result.detectedLanguage)
             } else if (result != null && result.isSameLanguage) {
                 failedBanners.remove(textKey)
                 textComponentCache.remove(textKey)
@@ -228,12 +230,13 @@ object MapBannerTranslationManager {
 
         val text = com.stellar.lang.format.FormattingTagHelper.componentToFormattedText(original).trim()
         val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(text)
-        val isBadgePrefix = clean.startsWith("[T]") || clean.startsWith("[...]")
+        val isBadgePrefix = clean.startsWith("[T]") || clean.startsWith("[...]") ||
+            com.stellar.lang.badge.LanguageFlagHelper.isFlagPrefix(clean)
         return if (clean.length < MIN_TRANSLATABLE_LENGTH || isBadgePrefix) null else text
     }
 
-    private fun createFormattedName(translatedText: String): MutableComponent {
-        val badge = TranslationBadgeHelper.createBadge(failed = false, trailingSpace = true)
+    private fun createFormattedName(translatedText: String, lang: String? = null): MutableComponent {
+        val badge = TranslationBadgeHelper.createBadge(lang = lang, failed = false, trailingSpace = true)
         val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(translatedText)
         return Component.empty().append(badge).append(textComp)
     }

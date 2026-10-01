@@ -35,7 +35,7 @@ import java.util.regex.Pattern
 
 /**
  * Manages translation of chat messages, compatible with Chat Heads and player prefixes,
- * providing clickable [T] toggle functionality.
+ * providing clickable flag toggle functionality.
  */
 @Suppress("LargeClass")
 object ChatTranslationManager {
@@ -416,7 +416,8 @@ object ChatTranslationManager {
     }
 
     internal fun shouldSkipMessage(text: String): Boolean {
-        val isBadgePrefix = text.startsWith("[T]") || text.startsWith("[...]")
+        val isBadgePrefix = text.startsWith("[T]") || text.startsWith("[...]") ||
+            com.stellar.lang.badge.LanguageFlagHelper.isFlagPrefix(text)
         return text.length < MIN_TRANSLATABLE_LENGTH || text.startsWith("/") || isBadgePrefix
     }
 
@@ -482,7 +483,7 @@ object ChatTranslationManager {
     ): MutableComponent {
         val root = Component.empty()
         val isHidden = TranslationBadgeHelper.isHidden()
-        if (!isHidden) {
+        if (!isHidden && badgeStyle.badgeText.isNotEmpty()) {
             val badge = Component.literal(badgeStyle.badgeText).withStyle { style ->
                 var s = style.withColor(badgeStyle.color)
                     .withHoverEvent(HoverEvent.ShowText(Component.literal(hoverText)))
@@ -521,35 +522,32 @@ object ChatTranslationManager {
             root.append(contentComp)
             return root
         }
-        val hoverText = "Translated: [${result.detectedLanguage} -> ${result.targetLanguage}]\n" +
+        val flagChar = com.stellar.lang.badge.LanguageFlagHelper.getFlagChar(result.detectedLanguage)
+        val flagEmoji = com.stellar.lang.badge.LanguageFlagHelper.getFlagEmoji(result.detectedLanguage)
+        val langName = com.stellar.lang.badge.LanguageFlagHelper.getLanguageName(result.detectedLanguage)
+        val hoverText = "$flagEmoji Translated from $langName\n" +
             "Original: ${result.originalText}\n$TOGGLE_HOVER_TEXT"
         return buildChatComponent(
             id = id,
             content = result.translatedText,
             prefixComponent = prefixComponent,
             hoverText = hoverText,
-            badgeStyle = ChatBadgeStyle("[T] ", ChatFormatting.AQUA, isBold = true),
+            badgeStyle = ChatBadgeStyle("$flagChar ", ChatFormatting.WHITE),
         )
     }
 
     fun createFailedComponent(
-        id: Long,
+        @Suppress("UnusedParameter") id: Long,
         originalText: String,
         prefixComponent: Component? = null,
     ): MutableComponent {
-        val hoverText = "Translation failed\nOriginal: $originalText\n$TOGGLE_HOVER_TEXT"
-        return buildChatComponent(
-            id = id,
-            content = originalText,
-            prefixComponent = prefixComponent,
-            hoverText = hoverText,
-            badgeStyle = ChatBadgeStyle(
-                badgeText = "[T] ",
-                color = ChatFormatting.RED,
-                isBold = true,
-                isStrikethrough = true,
-            ),
-        )
+        val root = Component.empty()
+        if (prefixComponent != null) {
+            root.append(prefixComponent)
+        }
+        val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(originalText)
+        root.append(textComp)
+        return root
     }
 
     fun createTranslatingComponent(

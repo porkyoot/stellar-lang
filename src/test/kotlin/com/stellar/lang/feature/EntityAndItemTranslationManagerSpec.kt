@@ -8,6 +8,7 @@ import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.shouldNotBe
 import io.kotest.matchers.string.shouldContain
+import io.kotest.matchers.string.shouldNotContain
 import net.minecraft.SharedConstants
 import net.minecraft.core.Holder
 import net.minecraft.core.component.DataComponentMap
@@ -103,7 +104,8 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
         TranslationService.putCache(diffResultFake)
 
         val diffResult = EntityTranslationManager.translateEntityName(null, orig)
-        diffResult.string shouldContain "[T] "
+        val frFlag = com.stellar.lang.badge.LanguageFlagHelper.getFlagChar("fr")
+        diffResult.string shouldContain "$frFlag "
         diffResult.string shouldContain "Wild Wolf"
     }
 
@@ -135,7 +137,8 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
             "en::${"Épée en diamant".hashCode()}",
             itemComp,
         ) as Component
-        resolved.string shouldContain "[T] "
+        val frFlag = com.stellar.lang.badge.LanguageFlagHelper.getFlagChar("fr")
+        resolved.string shouldContain "$frFlag "
         resolved.string shouldContain "Diamond Sword"
 
         // Disabled items test
@@ -151,7 +154,8 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
 
         // 1. First translation (cache hit)
         val trans1 = EntityTranslationManager.translateEntityName(null, orig)
-        trans1.string shouldContain "[T] "
+        val frFlag = com.stellar.lang.badge.LanguageFlagHelper.getFlagChar("fr")
+        trans1.string shouldContain "$frFlag "
         trans1.string shouldContain "Brown Horse"
 
         // 2. Second translation (entity cache hit)
@@ -291,7 +295,8 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
         // 1. Renamed stack translates correctly (cache hit)
         val renamedStack = createMockStack(orig)
         val trans1 = ItemTranslationManager.translateItemName(renamedStack, orig)
-        trans1.string shouldContain "[T] "
+        val frFlag = com.stellar.lang.badge.LanguageFlagHelper.getFlagChar("fr")
+        trans1.string shouldContain "$frFlag "
         trans1.string shouldContain "Iron Axe"
 
         // 2. Second translation (item cache hit)
@@ -449,22 +454,12 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
 
         val failedItem = itemCache[itemKey]
         failedItem shouldNotBe null
-        failedItem!!.string shouldContain "[T] "
-        failedItem.string shouldContain "Épée Maudite"
-        val itemBadge = failedItem.siblings.first()
-        itemBadge.style.color shouldBe net.minecraft.network.chat.TextColor.fromLegacyFormat(
-            net.minecraft.ChatFormatting.RED,
-        )
-        itemBadge.style.isStrikethrough shouldBe true
+        failedItem!!.string shouldNotContain "[T]"
+        failedItem.string shouldBe "Épée Maudite"
 
         val failedEntity = EntityTranslationManager.translateEntityName(null, entityComp)
-        failedEntity.string shouldContain "[T] "
-        failedEntity.string shouldContain "Monstre Sombre"
-        val entityBadge = failedEntity.siblings.first()
-        entityBadge.style.color shouldBe net.minecraft.network.chat.TextColor.fromLegacyFormat(
-            net.minecraft.ChatFormatting.RED,
-        )
-        entityBadge.style.isStrikethrough shouldBe true
+        failedEntity.string shouldNotContain "[T]"
+        failedEntity.string shouldBe "Monstre Sombre"
 
         // Verify direct access when failed triggers retry with translating badge
         ItemTranslationManager.clearCache()

@@ -1,7 +1,6 @@
 package com.stellar.lang.mixin
 
 import com.stellar.lang.book.BookLayoutConstants.BOOK_IMAGE_WIDTH
-import com.stellar.lang.book.BookLayoutConstants.BOOK_RETRY_INTERVAL_MS
 import com.stellar.lang.book.BookLayoutConstants.BOTTOM_BUTTON_MARGIN
 import com.stellar.lang.book.BookLayoutConstants.BUTTON_PADDING_Y
 import com.stellar.lang.book.BookLayoutConstants.BUTTON_PAGE_BACK_X
@@ -88,6 +87,12 @@ abstract class BookEditScreenMixin : Screen(Component.empty()) {
 
     @Unique
     private var isFailed: Boolean = false
+
+    @Unique
+    private var detectedLanguage: String? = null
+
+    @Unique
+    private var failureCount: Int = 0
 
     @Unique
     private var lastRetryTime: Long = 0L
@@ -215,17 +220,21 @@ abstract class BookEditScreenMixin : Screen(Component.empty()) {
             val mc = this.minecraft
             mc.execute {
                 isTranslating = false
+                detectedLanguage = result.detectedLanguage
                 if (result.isSameLanguage) {
                     showDualBookState = false
                     translatedAccess = null
                     isFailed = false
+                    failureCount = 0
                 } else if (result.isFailed) {
                     showDualBookState = true
                     isFailed = true
+                    failureCount++
                     translatedAccess = BookViewScreen.BookAccess(currentPages.map { Component.literal(it) })
                 } else {
                     showDualBookState = true
                     isFailed = false
+                    failureCount = 0
                     translatedAccess = result.access
                 }
                 updateLayout()
@@ -269,11 +278,14 @@ abstract class BookEditScreenMixin : Screen(Component.empty()) {
         val origCenterX = this.width / SCREEN_HALF_DIVISOR - hOffset
         val rightCenterX = this.width / SCREEN_HALF_DIVISOR + hOffset
         val widgetWidth = (BOOK_IMAGE_WIDTH * PREVIEW_SCALE_X).toInt()
+        val widgetHeight = (BOOK_IMAGE_WIDTH * PREVIEW_SCALE_Y).toInt()
         val rightLeft = (rightCenterX - widgetWidth / SCREEN_HALF_DIVISOR).toInt()
         val rightTop = backgroundTop()
 
         widget.x = rightLeft
         widget.y = rightTop
+        widget.width = widgetWidth
+        widget.height = widgetHeight
 
         val bgLeft = backgroundLeft()
         val bgTop = backgroundTop()
@@ -336,6 +348,7 @@ abstract class BookEditScreenMixin : Screen(Component.empty()) {
         if (currentSnapshot != lastObservedPages) {
             lastObservedPages = currentSnapshot
             lastChangeTime = System.currentTimeMillis()
+            failureCount = 0
         } else if (lastChangeTime != 0L && System.currentTimeMillis() - lastChangeTime >= debounceMs) {
             lastChangeTime = 0L
             if (shouldActivateDualBook(currentSnapshot)) {
@@ -352,7 +365,8 @@ abstract class BookEditScreenMixin : Screen(Component.empty()) {
 
         if (isFailed && !isTranslating) {
             val now = System.currentTimeMillis()
-            if (now - lastRetryTime >= BOOK_RETRY_INTERVAL_MS) {
+            val cooldown = com.stellar.lang.book.BookLayoutConstants.getBookRetryIntervalMs(failureCount)
+            if (now - lastRetryTime >= cooldown) {
                 lastRetryTime = now
                 requestBookTranslation(forceRetry = true)
             }
@@ -364,23 +378,27 @@ abstract class BookEditScreenMixin : Screen(Component.empty()) {
         val headerY = (backgroundTop() - HEADER_OFFSET_Y).coerceAtLeast(MIN_HEADER_Y)
 
         // Draw header above original book
+        val badge = if (isTranslating) {
+            com.stellar.lang.badge.TranslationBadgeHelper.createTranslatingBadge(trailingSpace = true)
+        } else {
+            com.stellar.lang.badge.TranslationBadgeHelper.createBadge(
+                lang = detectedLanguage,
+                failed = isFailed,
+                trailingSpace = true,
+            )
+        }
+        val origHeader = Component.empty().append(badge)
+            .append(Component.literal("Original").withStyle(ChatFormatting.GRAY))
         extractor.centeredText(
             this.font,
-            Component.literal("Original").withStyle(ChatFormatting.GRAY),
+            origHeader,
             origCenterX.toInt(),
             headerY,
             HEADER_GRAY_COLOR,
         )
 
         // Draw header above translated book
-        val langCode = TranslationService.getTargetLanguage().uppercase()
-        val badge = if (isTranslating) {
-            com.stellar.lang.badge.TranslationBadgeHelper.createTranslatingBadge(trailingSpace = true)
-        } else {
-            com.stellar.lang.badge.TranslationBadgeHelper.createBadge(failed = isFailed, trailingSpace = true)
-        }
-        val header = Component.empty().append(badge)
-            .append(Component.literal("Translated ($langCode)").withStyle(ChatFormatting.WHITE))
+        val header = Component.literal("Translated").withStyle(ChatFormatting.WHITE)
         extractor.centeredText(this.font, header, rightCenterX.toInt(), headerY, HEADER_WHITE_COLOR)
     }
 }

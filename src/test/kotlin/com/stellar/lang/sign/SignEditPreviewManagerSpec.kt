@@ -30,6 +30,7 @@ class SignEditPreviewManagerSpec : FunSpec({
         val result = SignEditPreviewManager.updateRealtimeTranslation("Bonjour")
         result shouldBe "Hello"
         SignEditPreviewManager.currentTranslatedText shouldBe "Hello"
+        SignEditPreviewManager.detectedLanguage shouldBe "fr"
         SignEditPreviewManager.lastRequestedText shouldBe "Bonjour"
         SignEditPreviewManager.isSameLanguage.get() shouldBe false
     }
@@ -127,5 +128,29 @@ class SignEditPreviewManagerSpec : FunSpec({
         SignEditPreviewManager.isTranslating.get() shouldBe false
         SignEditPreviewManager.hasFailed.get() shouldBe false
         SignEditPreviewManager.isSameLanguage.get() shouldBe false
+        SignEditPreviewManager.failureCount shouldBe 0
+    }
+
+    test("getRetryCooldownMs applies exponential backoff capped at max") {
+        SignEditPreviewManager.failureCount = 0
+        SignEditPreviewManager.getRetryCooldownMs() shouldBe 5_000L
+
+        SignEditPreviewManager.failureCount = 1
+        SignEditPreviewManager.getRetryCooldownMs() shouldBe 5_000L
+
+        SignEditPreviewManager.failureCount = 2
+        SignEditPreviewManager.getRetryCooldownMs() shouldBe 10_000L
+
+        SignEditPreviewManager.failureCount = 3
+        SignEditPreviewManager.getRetryCooldownMs() shouldBe 20_000L
+
+        SignEditPreviewManager.failureCount = 4
+        SignEditPreviewManager.getRetryCooldownMs() shouldBe 40_000L
+
+        SignEditPreviewManager.failureCount = 5
+        SignEditPreviewManager.getRetryCooldownMs() shouldBe 60_000L
+
+        SignEditPreviewManager.failureCount = 10
+        SignEditPreviewManager.getRetryCooldownMs() shouldBe 60_000L
     }
 })

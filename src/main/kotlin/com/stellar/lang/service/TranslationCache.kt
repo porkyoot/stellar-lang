@@ -15,14 +15,17 @@ import java.util.concurrent.ConcurrentHashMap
 /**
  * High-performance, persistent LRU translation cache with in-flight deduplication and circuit-breaker protection.
  */
-@Suppress("TooManyFunctions")
+@Suppress("TooManyFunctions", "LargeClass")
 object TranslationCache {
     private val logger: Logger = LoggerFactory.getLogger(StellarLangMod.MOD_ID)
     private val gson = Gson()
     const val ERROR_COOLDOWN_MS = 15_000L
+    const val MAX_COOLDOWN_MS = 300_000L
     private const val DEFAULT_CIRCUIT_BREAKER_MS = 60_000L
     private const val INITIAL_CAPACITY = 16
     private const val LOAD_FACTOR = 0.75f
+    private const val MAX_BACKOFF_POWER = 6
+    private const val RESET_WINDOW_MULTIPLIER = 2L
 
     private class LruMap<K, V>(private var maxEntries: Int) : LinkedHashMap<K, V>(INITIAL_CAPACITY, LOAD_FACTOR, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<K, V>?): Boolean {
@@ -39,6 +42,8 @@ object TranslationCache {
     private val lruCache = LruMap<String, TranslationResult>(StellarLangConfig.DEFAULT_MAX_CACHE_ENTRIES)
     private val inFlight = mutableMapOf<String, MutableList<(TranslationResult?) -> Unit>>()
     private val failedAttempts = ConcurrentHashMap<String, Long>()
+    private val failureCounts = ConcurrentHashMap<String, Int>()
+    private val lastFailureTimes = ConcurrentHashMap<String, Long>()
 
     @Volatile
     private var isDirty = false
@@ -94,6 +99,7 @@ object TranslationCache {
             lruCache[key] = result
             isDirty = true
         }
+        removeFailed(key)
     }
 
     fun evict(text: String, targetLang: String) {
@@ -103,7 +109,7 @@ object TranslationCache {
             lruCache.remove(key)
             isDirty = true
         }
-        failedAttempts.remove(key)
+        removeFailed(key)
     }
 
     fun size(): Int {
@@ -167,13 +173,37 @@ object TranslationCache {
     }
 
     fun markFailed(key: String) {
-        failedAttempts[key] = System.currentTimeMillis()
+        val now = System.currentTimeMillis()
+        val lastFail = lastFailureTimes[key] ?: 0L
+        val currentCount = failureCounts[key] ?: 0
+        val currentCooldown = calculateCooldown(currentCount)
+        val newCount = if (currentCount > 0 && now - lastFail > currentCooldown * RESET_WINDOW_MULTIPLIER) {
+            1
+        } else {
+            (currentCount + 1).coerceAtMost(MAX_BACKOFF_POWER)
+        }
+        failedAttempts[key] = now
+        lastFailureTimes[key] = now
+        failureCounts[key] = newCount
     }
+
+    private fun calculateCooldown(count: Int): Long {
+        val factor = 1L shl (count - 1).coerceAtLeast(0)
+        return (ERROR_COOLDOWN_MS * factor).coerceAtMost(MAX_COOLDOWN_MS)
+    }
+
+    fun getCooldownMs(key: String): Long {
+        val count = failureCounts[key] ?: 1
+        return calculateCooldown(count)
+    }
+
+    fun getFailureCount(key: String): Int = failureCounts[key] ?: 0
 
     fun isThrottled(key: String): Boolean {
         val lastFail = failedAttempts[key] ?: return false
         val elapsed = System.currentTimeMillis() - lastFail
-        if (elapsed < ERROR_COOLDOWN_MS) {
+        val cooldown = getCooldownMs(key)
+        if (elapsed < cooldown) {
             return true
         }
         failedAttempts.remove(key)
@@ -186,6 +216,8 @@ object TranslationCache {
 
     fun removeFailed(key: String) {
         failedAttempts.remove(key)
+        failureCounts.remove(key)
+        lastFailureTimes.remove(key)
     }
 
     fun clear() {
@@ -197,6 +229,8 @@ object TranslationCache {
             inFlight.clear()
         }
         failedAttempts.clear()
+        failureCounts.clear()
+        lastFailureTimes.clear()
         resetCircuitBreaker()
     }
 
@@ -292,6 +326,8 @@ object TranslationCache {
             inFlight.clear()
         }
         failedAttempts.clear()
+        failureCounts.clear()
+        lastFailureTimes.clear()
         resetCircuitBreaker()
     }
 }

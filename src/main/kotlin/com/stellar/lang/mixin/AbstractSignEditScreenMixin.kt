@@ -44,7 +44,7 @@ abstract class AbstractSignEditScreenMixin : Screen(Component.empty()) {
     protected abstract fun getSignYOffset(): Float
 
     private fun getHorizontalOffset(): Float =
-        if (this.width >= 380) 105f else (this.width / 4.0f).coerceAtLeast(65f)
+        if (this.width >= 380) 110f else (this.width / 4.0f).coerceAtLeast(65f)
 
     @ModifyVariable(method = ["extractSign"], at = [At("STORE")], ordinal = 0)
     private fun stellarModifySignX(originalX: Float): Float {
@@ -73,62 +73,71 @@ abstract class AbstractSignEditScreenMixin : Screen(Component.empty()) {
         val secondSignX = this.width / 2.0f + hOffset
         val secondSignY = this.getSignYOffset()
 
-        // Draw headers above signs
-        extractor.centeredText(
-            this.font,
-            Component.literal("Original").withStyle(ChatFormatting.GRAY),
-            origX.toInt(),
-            (origY - 50).toInt(),
-            0xFFAAAAAA.toInt(),
-        )
+        // 1. Draw the second wider sign
+        renderSecondWiderSign(extractor, secondSignX, secondSignY)
 
-        val langCode = TranslationService.getTargetLanguage().uppercase()
+        // 2. Draw labels under signs to avoid colliding with hanging sign UI or title
         val isSameLang = SignEditPreviewManager.isSameLanguage.get()
         val badge = if (SignEditPreviewManager.isTranslating.get()) {
             com.stellar.lang.badge.TranslationBadgeHelper.createTranslatingBadge(trailingSpace = true)
         } else {
             com.stellar.lang.badge.TranslationBadgeHelper.createBadge(
-                SignEditPreviewManager.hasFailed.get(),
+                lang = SignEditPreviewManager.detectedLanguage,
+                failed = SignEditPreviewManager.hasFailed.get(),
                 trailingSpace = true,
             )
         }
-        val header = if (isSameLang) {
+        val origHeader = Component.empty().append(badge)
+            .append(Component.literal("Original").withStyle(ChatFormatting.GRAY))
+
+        val translatedHeader = if (isSameLang) {
             Component.empty()
                 .append(Component.literal("[=] ").withStyle(ChatFormatting.DARK_GRAY))
-                .append(Component.literal("Same Language ($langCode)").withStyle(ChatFormatting.GRAY))
+                .append(Component.literal("Same Language").withStyle(ChatFormatting.GRAY))
         } else {
-            Component.empty().append(badge)
-                .append(Component.literal("Translated ($langCode)").withStyle(ChatFormatting.WHITE))
+            Component.literal("Translated").withStyle(ChatFormatting.WHITE)
         }
+
+        val labelY = (origY + 38).toInt()
         extractor.centeredText(
             this.font,
-            header,
-            secondSignX.toInt(),
-            (secondSignY - 50).toInt(),
-            0xFFFFFFFF.toInt(),
+            origHeader,
+            origX.toInt(),
+            labelY,
+            0xFFAAAAAA.toInt(),
         )
 
-        // Draw the second bigger sign
-        renderSecondBiggerSign(extractor, secondSignX, secondSignY)
+        extractor.centeredText(
+            this.font,
+            translatedHeader,
+            secondSignX.toInt(),
+            labelY,
+            0xFFFFFFFF.toInt(),
+        )
     }
 
-    private fun renderSecondBiggerSign(extractor: GuiGraphicsExtractor, secondSignX: Float, secondSignY: Float) {
-        val previewScale = 1.35f
+    private fun renderSecondWiderSign(extractor: GuiGraphicsExtractor, secondSignX: Float, secondSignY: Float) {
+        val previewScaleX = 1.45f
+        val previewScaleY = 1.0f
 
         extractor.pose().pushMatrix()
         extractor.pose().translate(secondSignX, secondSignY)
-        extractor.pose().scale(previewScale, previewScale)
 
+        // Draw sign background wider
         extractor.pose().pushMatrix()
+        extractor.pose().scale(previewScaleX, previewScaleY)
         this.extractSignBackground(extractor)
         extractor.pose().popMatrix()
 
+        // Draw text with the exact same scale as the original sign
+        extractor.pose().pushMatrix()
         val textScale = this.getSignTextScale()
         extractor.pose().scale(textScale.x(), textScale.y())
 
         val fullOriginal = messages.map { it.trim() }.filter { it.isNotEmpty() }.joinToString(" ")
         val translated = SignEditPreviewManager.updateRealtimeTranslation(fullOriginal)
         renderPreviewContent(extractor, fullOriginal, translated)
+        extractor.pose().popMatrix()
 
         extractor.pose().popMatrix()
     }
@@ -149,9 +158,8 @@ abstract class AbstractSignEditScreenMixin : Screen(Component.empty()) {
         }
 
         if (isSameLang) {
-            val langCode = TranslationService.getTargetLanguage().uppercase()
             val sameLangMsg = "[Same Language]"
-            val subMsg = "Already in $langCode"
+            val subMsg = "Already translated"
             val msgWidth = this.font.width(sameLangMsg)
             val subWidth = this.font.width(subMsg)
             extractor.text(this.font, sameLangMsg, -msgWidth / 2, -this.font.lineHeight, 0x888888, false)
