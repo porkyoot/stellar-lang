@@ -503,7 +503,11 @@ object ChatTranslationManager {
     internal fun shouldSkipMessage(text: String): Boolean {
         val isBadgePrefix = text.startsWith("[T]") || text.startsWith("[...]") ||
             com.stellar.lang.badge.LanguageFlagHelper.isFlagPrefix(text)
-        return text.length < MIN_TRANSLATABLE_LENGTH || text.startsWith("/") || isBadgePrefix
+        val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(text).trim()
+        return text.length < MIN_TRANSLATABLE_LENGTH ||
+            text.startsWith("/") ||
+            isBadgePrefix ||
+            com.stellar.lang.plugin.LanguageDetectionHelper.isUniversalSlang(clean)
     }
 
     fun hasTranslatableKey(component: Component, predicate: (String) -> Boolean): Boolean {

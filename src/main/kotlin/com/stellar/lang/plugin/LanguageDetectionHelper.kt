@@ -198,6 +198,42 @@ object LanguageDetectionHelper {
         "stop", "fox", "sleepy", "castle", "outpost", "north", "south", "east", "west",
     )
 
+    val UNIVERSAL_SLANG: Set<String> = setOf(
+        "ok", "okay", "k", "kk", "lol", "lmao", "lmfao", "rofl", "roflmao", "xd", "gg", "ggwp",
+        "glhf", "gl", "hf", "wp", "afk", "brb", "omg", "omfg", "wtf", "wth", "idk", "idc",
+        "tbh", "imo", "imho", "np", "ty", "thx", "pls", "plz", "yw", "gn", "gm", "o7",
+        "bruh", "rip", "pog", "poggers", "f", "cap", "no cap", "fr", "frfr", "sus", "gtg", "g2g",
+        "haha", "hahaha", "hahahaha", "hehe", "hehehe", "lolol", "lololol", "cool", "nice",
+        "wow", "yay", "yup", "yep", "nope", "nah", "yes", "no", "hi", "bye", "hey",
+    )
+
+    private const val MIN_SCORE_MARGIN = 1.0f
+    private const val SHORT_TEXT_MIN_MARGIN = 1.5f
+
+    fun normalizeRepeatedCharacters(raw: String): String {
+        return raw.replace(Regex("(?i)(.)\\1{2,}")) { it.groupValues[1] }
+    }
+
+    fun isUniversalSlang(raw: String): Boolean {
+        val clean = cleanForDetection(raw)
+        if (clean.isEmpty()) return false
+        val words = clean.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        if (words.isEmpty()) return false
+        return words.all { word ->
+            val norm = normalizeRepeatedCharacters(word)
+            norm in UNIVERSAL_SLANG ||
+                isEmoticonOrLaugh(word) ||
+                isEmoticonOrLaugh(norm)
+        }
+    }
+
+    private fun isEmoticonOrLaugh(word: String): Boolean {
+        if (word in setOf(":)", ":(", ":d", ":p", ":3", ";-)", ";)", "-_-", "^^", "^_^", "<3", "xd", "o7")) return true
+        if (word.matches(Regex("(?i)^(ha|he|ja|lo)+l*$"))) return true
+        if (word.matches(Regex("(?i)^x+d+$"))) return true
+        return false
+    }
+
     /**
      * Attempts fast dictionary / script-based language identification.
      * Returns a 2-letter language code if high-confidence match is found, or null otherwise.
@@ -206,22 +242,31 @@ object LanguageDetectionHelper {
         val clean = cleanForDetection(text)
         if (clean.isEmpty()) return null
 
-        // 1. Direct dictionary match
-        val dictMatch = QUICK_DICTIONARY[clean]
+        // 1. Universal chat slang & emoticons (ok, lol, lmao, xd, etc.) -> treat as English
+        if (isUniversalSlang(clean)) {
+            return "en"
+        }
+
+        // 2. Direct dictionary match (including after collapsing repeated letters)
+        val dictMatch = QUICK_DICTIONARY[clean] ?: QUICK_DICTIONARY[normalizeRepeatedCharacters(clean)]
         if (dictMatch != null) return dictMatch
 
-        // 2. Non-Latin script detection
+        // 3. Non-Latin script detection
         val scriptLang = detectScript(clean)
         if (scriptLang != null) return scriptLang
 
-        // 3. Short phrase function word heuristics
+        // 4. Short phrase function word heuristics
+        val normalized = normalizeRepeatedCharacters(clean)
         val words = clean.split(Regex("\\s+")).filter { it.isNotEmpty() }
+        val normWords = normalized.split(Regex("\\s+")).filter { it.isNotEmpty() }
         if (words.size in 1..10) {
-            val englishHits = words.count { it in ENGLISH_SPECIFIC_WORDS }
+            val englishHits = words.count { it in ENGLISH_SPECIFIC_WORDS } +
+                normWords.count { it in ENGLISH_SPECIFIC_WORDS && it !in words }
             if (englishHits >= 2 || (englishHits >= 1 && words.size <= 2)) {
                 return "en"
             }
-            val frenchHits = words.count { it in FRENCH_SPECIFIC_WORDS }
+            val frenchHits = words.count { it in FRENCH_SPECIFIC_WORDS } +
+                normWords.count { it in FRENCH_SPECIFIC_WORDS && it !in words }
             if (frenchHits >= 2 || (frenchHits >= 1 && (clean.contains("è") || clean.contains("é") || clean.contains("ê")))) {
                 return "fr"
             }
@@ -295,12 +340,15 @@ object LanguageDetectionHelper {
         if (logits.isEmpty() || idToLanguage.isEmpty()) return null
 
         val clean = rawText.lowercase(Locale.ROOT)
+        if (isUniversalSlang(clean)) return "en"
+
         val hasFrenchAccents = clean.any { it in "éèêëàâùûôîïçœ" }
-        val hasSpanishAccents = clean.any { it in "ñ¿¡" }
+        val hasSpanishAccents = clean.any { it in "ñ¿¡áíóú" }
         val hasGermanUmlauts = clean.any { it in "äöüß" }
 
         var bestIdx = -1
         var bestScore = Float.NEGATIVE_INFINITY
+        var secondScore = Float.NEGATIVE_INFINITY
 
         for (i in logits.indices) {
             if (i !in idToLanguage.indices) continue
@@ -318,12 +366,24 @@ object LanguageDetectionHelper {
             if (hasGermanUmlauts && lang == "de") score += ACCENT_BONUS
 
             if (score > bestScore) {
+                secondScore = bestScore
                 bestScore = score
                 bestIdx = i
+            } else if (score > secondScore) {
+                secondScore = score
             }
         }
 
-        return if (bestIdx in idToLanguage.indices) idToLanguage[bestIdx] else null
+        if (bestIdx !in idToLanguage.indices) return null
+        val bestLang = idToLanguage[bestIdx]
+
+        if (bestLang !in SUPPORTED_LANGUAGES) return null
+
+        val isShort = clean.length <= 25 || clean.split(Regex("\\s+")).size <= 3
+        val hasRepeating = clean.contains(Regex("(.)\\1{2,}"))
+        val requiredMargin = if (isShort || hasRepeating) SHORT_TEXT_MIN_MARGIN else MIN_SCORE_MARGIN
+
+        return if (bestScore - secondScore >= requiredMargin) bestLang else null
     }
 
     /**

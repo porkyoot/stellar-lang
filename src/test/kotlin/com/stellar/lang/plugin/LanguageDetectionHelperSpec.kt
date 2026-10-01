@@ -133,4 +133,51 @@ class LanguageDetectionHelperSpec : FunSpec({
         val selectedDe = LanguageDetectionHelper.selectBestLanguage(germanLogits, idToLanguage, "schön")
         selectedDe shouldBe "de"
     }
+
+    test("isUniversalSlang recognizes common gaming and chat expressions") {
+        LanguageDetectionHelper.isUniversalSlang("ok") shouldBe true
+        LanguageDetectionHelper.isUniversalSlang("lmao") shouldBe true
+        LanguageDetectionHelper.isUniversalSlang("lol") shouldBe true
+        LanguageDetectionHelper.isUniversalSlang("XD") shouldBe true
+        LanguageDetectionHelper.isUniversalSlang("xddd") shouldBe true
+        LanguageDetectionHelper.isUniversalSlang("loooool") shouldBe true
+        LanguageDetectionHelper.isUniversalSlang("hahaha") shouldBe true
+        LanguageDetectionHelper.isUniversalSlang("gg") shouldBe true
+        LanguageDetectionHelper.isUniversalSlang("brb") shouldBe true
+        LanguageDetectionHelper.isUniversalSlang("omggggg") shouldBe true
+        LanguageDetectionHelper.isUniversalSlang("bruhhhh") shouldBe true
+        LanguageDetectionHelper.isUniversalSlang("C'est une grande maison") shouldBe false
+    }
+
+    test("normalizeRepeatedCharacters collapses repeating characters") {
+        LanguageDetectionHelper.normalizeRepeatedCharacters("nooooo") shouldBe "no"
+        LanguageDetectionHelper.normalizeRepeatedCharacters("yessssss") shouldBe "yes"
+        LanguageDetectionHelper.normalizeRepeatedCharacters("loooool") shouldBe "lol"
+        LanguageDetectionHelper.normalizeRepeatedCharacters("sooooo") shouldBe "so"
+        LanguageDetectionHelper.normalizeRepeatedCharacters("merciiii") shouldBe "merci"
+    }
+
+    test("detectQuick handles slang and words with repeated letters") {
+        LanguageDetectionHelper.detectQuick("ok") shouldBe "en"
+        LanguageDetectionHelper.detectQuick("lmao") shouldBe "en"
+        LanguageDetectionHelper.detectQuick("nooooo") shouldBe "en"
+        LanguageDetectionHelper.detectQuick("yessssss") shouldBe "en"
+        LanguageDetectionHelper.detectQuick("merciiii") shouldBe "fr"
+        LanguageDetectionHelper.detectQuick("dankeeee") shouldBe "de"
+    }
+
+    test("selectBestLanguage rejects unsupported dialects such as Wolof and weak margins") {
+        val languagesWithWolof = arrayOf("en", "wo", "id")
+        val wolofHighLogits = floatArrayOf(2.0f, 10.0f, 1.0f)
+        // Even though Wolof is highest in raw logits, it is not in SUPPORTED_LANGUAGES so it must be rejected
+        LanguageDetectionHelper.selectBestLanguage(wolofHighLogits, languagesWithWolof, "ok") shouldBe "en"
+
+        // For non-slang text, an unsupported language must yield null
+        LanguageDetectionHelper.selectBestLanguage(wolofHighLogits, languagesWithWolof, "asdfghjk") shouldBe null
+
+        // Weak margin on short text should be rejected
+        val weakLogits = floatArrayOf(5.0f, 4.8f, 1.0f)
+        val shortLanguages = arrayOf("en", "es", "de")
+        LanguageDetectionHelper.selectBestLanguage(weakLogits, shortLanguages, "short") shouldBe null
+    }
 })

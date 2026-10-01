@@ -2,6 +2,9 @@
     "TooGenericExceptionCaught",
     "LongParameterList",
     "CognitiveComplexMethod",
+    "CyclomaticComplexMethod",
+    "ComplexCondition",
+    "MagicNumber",
     "StringLiteralDuplication",
 )
 
@@ -203,17 +206,23 @@ class LibreTranslatePlugin(
 
             val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
             if (response.statusCode() in HTTP_OK_MIN..HTTP_OK_MAX) {
-                val json = JsonParser.parseString(response.body())
-                if (json.isJsonArray && !json.asJsonArray.isEmpty) {
-                    val first = json.asJsonArray.get(0).asJsonObject
-                    first.get("language")?.asString
-                } else {
-                    null
-                }
+                parseDetectResponse(response.body(), text)
             } else {
                 null
             }
         }.getOrNull()
+    }
+
+    private fun parseDetectResponse(body: String, text: String): String? {
+        val json = JsonParser.parseString(body)
+        if (!json.isJsonArray || json.asJsonArray.isEmpty) return null
+        val first = json.asJsonArray.get(0).asJsonObject
+        val lang = first.get("language")?.asString ?: return null
+        val confidence = first.get("confidence")?.asFloat ?: DEFAULT_CONFIDENCE
+        val isShort = text.length <= SHORT_TEXT_THRESHOLD || text.contains(Regex("(.)\\1{2,}"))
+        val minConfidence = if (isShort) MIN_CONFIDENCE_SHORT else MIN_CONFIDENCE_DEFAULT
+        val isSupported = lang in com.stellar.lang.plugin.LanguageDetectionHelper.SUPPORTED_LANGUAGES
+        return if (confidence >= minConfidence && isSupported) lang else null
     }
 
     fun normalizeEndpoint(host: String, path: String): String {
@@ -238,5 +247,9 @@ class LibreTranslatePlugin(
         private const val APPLICATION_JSON = "application/json"
         private const val HEADER_CONTENT_TYPE = "Content-Type"
         private const val HEADER_ACCEPT = "Accept"
+        private const val DEFAULT_CONFIDENCE = 100f
+        private const val SHORT_TEXT_THRESHOLD = 25
+        private const val MIN_CONFIDENCE_SHORT = 80f
+        private const val MIN_CONFIDENCE_DEFAULT = 60f
     }
 }

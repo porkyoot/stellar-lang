@@ -54,6 +54,8 @@ object TranslationService {
     private const val MAX_ATTEMPTS_PER_PROVIDER = 2
     private const val RETRY_DELAY_MS = 50L
     private const val LIBRETRANSLATE_PROVIDER_ID = "libretranslate"
+    private const val MIN_LIBRE_CONFIDENCE = 60.0f
+    private const val DEFAULT_CONFIDENCE = 100f
 
     @Volatile
     private var lastNetworkException: Throwable? = null
@@ -390,6 +392,9 @@ object TranslationService {
 
     internal fun detectLanguage(text: String): String {
         val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(text)
+        if (com.stellar.lang.plugin.LanguageDetectionHelper.isUniversalSlang(clean)) {
+            return getTargetLanguage()
+        }
         val quick = com.stellar.lang.plugin.LanguageDetectionHelper.detectQuick(clean)
         if (quick != null) return quick
 
@@ -1051,10 +1056,23 @@ object TranslationService {
     private fun extractLanguageFromElement(element: JsonElement?): String {
         if (element == null || element.isJsonNull) return UNKNOWN_LANG
         if (element.isJsonObject) {
-            return element.asJsonObject.get("language")?.asString ?: UNKNOWN_LANG
+            val obj = element.asJsonObject
+            val lang = obj.get("language")?.asString ?: return UNKNOWN_LANG
+            val confidence = obj.get("confidence")?.asFloat ?: DEFAULT_CONFIDENCE
+            if (confidence >= MIN_LIBRE_CONFIDENCE &&
+                lang in com.stellar.lang.plugin.LanguageDetectionHelper.SUPPORTED_LANGUAGES
+            ) {
+                return lang
+            }
+            return UNKNOWN_LANG
         }
         if (element.isJsonPrimitive && element.asJsonPrimitive.isString) {
-            return element.asString
+            val lang = element.asString
+            return if (lang in com.stellar.lang.plugin.LanguageDetectionHelper.SUPPORTED_LANGUAGES) {
+                lang
+            } else {
+                UNKNOWN_LANG
+            }
         }
         return UNKNOWN_LANG
     }
