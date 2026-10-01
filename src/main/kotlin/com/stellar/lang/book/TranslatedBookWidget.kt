@@ -122,7 +122,7 @@ class TranslatedBookWidget(
         val access = translatedAccessSupplier()
         if (access == null) {
             if (isTranslatingSupplier()) {
-                val loadingMsg = Component.literal("...").withStyle(ChatFormatting.GRAY)
+                val loadingMsg = Component.translatable("stellar_lang.ui.translating").withStyle(ChatFormatting.GRAY)
                 val msgWidth = font.width(loadingMsg)
                 val posX = this.width / 2 - msgWidth / 2
                 val posY = this.height / 2

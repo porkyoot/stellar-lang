@@ -88,14 +88,14 @@ abstract class AbstractSignEditScreenMixin : Screen(Component.empty()) {
             )
         }
         val origHeader = Component.empty().append(badge)
-            .append(Component.literal("Original").withStyle(ChatFormatting.GRAY))
+            .append(Component.translatable("stellar_lang.ui.original").withStyle(ChatFormatting.GRAY))
 
         val translatedHeader = if (isSameLang) {
             Component.empty()
                 .append(Component.literal("[=] ").withStyle(ChatFormatting.DARK_GRAY))
-                .append(Component.literal("Same Language").withStyle(ChatFormatting.GRAY))
+                .append(Component.translatable("stellar_lang.ui.same_language").withStyle(ChatFormatting.GRAY))
         } else {
-            Component.literal("Translated").withStyle(ChatFormatting.WHITE)
+            Component.translatable("stellar_lang.ui.translated").withStyle(ChatFormatting.WHITE)
         }
 
         val labelY = (origY + 38).toInt()

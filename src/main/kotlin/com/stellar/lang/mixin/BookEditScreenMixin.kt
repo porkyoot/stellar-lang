@@ -388,7 +388,7 @@ abstract class BookEditScreenMixin : Screen(Component.empty()) {
             )
         }
         val origHeader = Component.empty().append(badge)
-            .append(Component.literal("Original").withStyle(ChatFormatting.GRAY))
+            .append(Component.translatable("stellar_lang.ui.original").withStyle(ChatFormatting.GRAY))
         extractor.centeredText(
             this.font,
             origHeader,
@@ -398,7 +398,7 @@ abstract class BookEditScreenMixin : Screen(Component.empty()) {
         )
 
         // Draw header above translated book
-        val header = Component.literal("Translated").withStyle(ChatFormatting.WHITE)
+        val header = Component.translatable("stellar_lang.ui.translated").withStyle(ChatFormatting.WHITE)
         extractor.centeredText(this.font, header, rightCenterX.toInt(), headerY, HEADER_WHITE_COLOR)
     }
 }

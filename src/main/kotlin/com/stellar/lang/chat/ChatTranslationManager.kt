@@ -42,7 +42,6 @@ object ChatTranslationManager {
     const val COMMAND_PREFIX: String = "/stellar_lang_chat_toggle"
     const val TRANSLATION_TIMEOUT_SECONDS: Long = 5L
     private const val MIN_TRANSLATABLE_LENGTH = 2
-    private const val TOGGLE_HOVER_TEXT = "Click to toggle original/translated text"
     private val idGenerator = AtomicLong(1000L)
     internal val trackedMessages = ConcurrentHashMap<Long, TrackedChatMessage>()
 
@@ -478,7 +477,7 @@ object ChatTranslationManager {
         id: Long,
         content: String,
         prefixComponent: Component?,
-        hoverText: String,
+        hoverComponent: Component,
         badgeStyle: ChatBadgeStyle,
     ): MutableComponent {
         val root = Component.empty()
@@ -486,7 +485,7 @@ object ChatTranslationManager {
         if (!isHidden && badgeStyle.badgeText.isNotEmpty()) {
             val badge = Component.literal(badgeStyle.badgeText).withStyle { style ->
                 var s = style.withColor(badgeStyle.color)
-                    .withHoverEvent(HoverEvent.ShowText(Component.literal(hoverText)))
+                    .withHoverEvent(HoverEvent.ShowText(hoverComponent))
                     .withClickEvent(ClickEvent.RunCommand(buildToggleCommand(id)))
                 if (badgeStyle.isBold) s = s.withBold(true)
                 if (badgeStyle.isStrikethrough) s = s.withStrikethrough(true)
@@ -500,7 +499,7 @@ object ChatTranslationManager {
         val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(content)
         if (isHidden) {
             textComp.withStyle { style ->
-                style.withHoverEvent(HoverEvent.ShowText(Component.literal(hoverText)))
+                style.withHoverEvent(HoverEvent.ShowText(hoverComponent))
                     .withClickEvent(ClickEvent.RunCommand(buildToggleCommand(id)))
             }
         }
@@ -525,13 +524,18 @@ object ChatTranslationManager {
         val flagChar = com.stellar.lang.badge.LanguageFlagHelper.getFlagChar(result.detectedLanguage)
         val flagEmoji = com.stellar.lang.badge.LanguageFlagHelper.getFlagEmoji(result.detectedLanguage)
         val langName = com.stellar.lang.badge.LanguageFlagHelper.getLanguageName(result.detectedLanguage)
-        val hoverText = "$flagEmoji Translated from $langName\n" +
-            "Original: ${result.originalText}\n$TOGGLE_HOVER_TEXT"
+        val hoverComponent = Component.empty()
+            .append(Component.literal("$flagEmoji "))
+            .append(Component.translatable("stellar_lang.chat.translated_from", langName))
+            .append(Component.literal("\n"))
+            .append(Component.translatable("stellar_lang.chat.original", result.originalText))
+            .append(Component.literal("\n"))
+            .append(Component.translatable("stellar_lang.chat.toggle_hover"))
         return buildChatComponent(
             id = id,
             content = result.translatedText,
             prefixComponent = prefixComponent,
-            hoverText = hoverText,
+            hoverComponent = hoverComponent,
             badgeStyle = ChatBadgeStyle("$flagChar ", ChatFormatting.WHITE),
         )
     }
@@ -555,12 +559,17 @@ object ChatTranslationManager {
         originalText: String,
         prefixComponent: Component? = null,
     ): MutableComponent {
-        val hoverText = "Translating...\nOriginal: $originalText\n$TOGGLE_HOVER_TEXT"
+        val hoverComponent = Component.empty()
+            .append(Component.translatable("stellar_lang.chat.translating"))
+            .append(Component.literal("\n"))
+            .append(Component.translatable("stellar_lang.chat.original", originalText))
+            .append(Component.literal("\n"))
+            .append(Component.translatable("stellar_lang.chat.toggle_hover"))
         return buildChatComponent(
             id = id,
             content = originalText,
             prefixComponent = prefixComponent,
-            hoverText = hoverText,
+            hoverComponent = hoverComponent,
             badgeStyle = ChatBadgeStyle("[...] ", ChatFormatting.GRAY),
         )
     }
