@@ -481,6 +481,9 @@ object ChatTranslationManager {
         badgeStyle: ChatBadgeStyle,
     ): MutableComponent {
         val root = Component.empty()
+        if (prefixComponent != null) {
+            root.append(prefixComponent)
+        }
         val isHidden = TranslationBadgeHelper.isHidden()
         if (!isHidden && badgeStyle.badgeText.isNotEmpty()) {
             val badge = Component.literal(badgeStyle.badgeText).withStyle { style ->
@@ -492,9 +495,6 @@ object ChatTranslationManager {
                 s
             }
             root.append(badge)
-        }
-        if (prefixComponent != null) {
-            root.append(prefixComponent)
         }
         val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(content)
         if (isHidden) {

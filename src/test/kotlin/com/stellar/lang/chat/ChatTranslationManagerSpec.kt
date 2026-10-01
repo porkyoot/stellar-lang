@@ -351,7 +351,7 @@ class ChatTranslationManagerSpec : FunSpec({
             payload.messageText,
             payload.prefixComponent,
         )
-        translatingComp.string shouldBe "[...] <\uFFFCPorkyoot> Bonjour"
+        translatingComp.string shouldBe "<\uFFFCPorkyoot> [...] Bonjour"
         translatingComp.string shouldNotContain "BonjourBonjour"
     }
 
@@ -664,7 +664,7 @@ class ChatTranslationManagerSpec : FunSpec({
             payload.messageText,
             payload.prefixComponent,
         )
-        translating.string shouldBe "[...] <Player> Hello"
+        translating.string shouldBe "<Player> [...] Hello"
         translating.string shouldNotContain "HelloHello"
 
         val fakeResult = TranslationResult("Hello", "Bonjour", "en", "fr", false)
@@ -674,7 +674,7 @@ class ChatTranslationManagerSpec : FunSpec({
             payload.prefixComponent,
         )
         val enFlag = com.stellar.lang.badge.LanguageFlagHelper.getFlagChar("en")
-        translated.string shouldBe "$enFlag <Player> Bonjour"
+        translated.string shouldBe "<Player> $enFlag Bonjour"
         translated.string shouldNotContain "HelloHello"
     }
 

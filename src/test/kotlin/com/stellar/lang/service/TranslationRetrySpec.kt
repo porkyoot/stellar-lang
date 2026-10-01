@@ -389,7 +389,7 @@ class TranslationRetrySpec : FunSpec({
             "Prefixed chat",
             Component.literal("[PREFIX] "),
         )
-        prefixedComp.string shouldBe "[...] [PREFIX] Prefixed chat"
+        prefixedComp.string shouldBe "[PREFIX] [...] Prefixed chat"
     }
 
     test("Item, entity, and sign translation managers throttle retries within cooldown") {
