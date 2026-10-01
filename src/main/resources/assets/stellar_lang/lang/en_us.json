@@ -49,5 +49,15 @@
   "stellar_lang.config.cache_to_disk": "Cache to Disk",
   "stellar_lang.config.cache_to_disk.comment": "Enable persistent disk caching of translations across game sessions",
   "stellar_lang.config.max_cache_entries": "Max Cache Entries",
-  "stellar_lang.config.max_cache_entries.comment": "Maximum number of translations to keep in memory/disk cache"
+  "stellar_lang.config.max_cache_entries.comment": "Maximum number of translations to keep in memory/disk cache",
+  "stellar_lang.config.show_error_toasts": "Show Error Toasts",
+  "stellar_lang.config.show_error_toasts.comment": "Show in-game toast notifications for the first occurrence of API errors",
+  "stellar_lang.toast.error_title": "StellarLang: %s",
+  "stellar_lang.toast.rate_limited": "API rate limit reached. Backing off automatically.",
+  "stellar_lang.toast.quota_exceeded": "Monthly translation quota exhausted. Check your plan or change provider.",
+  "stellar_lang.toast.auth_failed": "Authentication failed. Check your API key in settings.",
+  "stellar_lang.toast.connection_refused": "Connection refused. Ensure your translation server is running.",
+  "stellar_lang.toast.network_error": "Cannot connect to server. Check your network connection.",
+  "stellar_lang.toast.server_error": "Translation server error. Falling back to alternative provider.",
+  "stellar_lang.toast.model_not_ready": "Local model not ready. Download model or enable auto-download."
 }

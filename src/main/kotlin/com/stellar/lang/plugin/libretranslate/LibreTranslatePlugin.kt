@@ -108,14 +108,11 @@ class LibreTranslatePlugin(
                 val json = JsonParser.parseString(response.body()).asJsonObject
                 json.get("translatedText")?.asString
             } else {
-                if (response.statusCode() == HTTP_TOO_MANY_REQUESTS) {
-                    TranslationCache.tripCircuitBreaker()
-                }
-                logger.warn("LibreTranslate HTTP {}: {}", response.statusCode(), response.body())
+                handleHttpError(response.statusCode(), response.body())
                 null
             }
         }.getOrElse { ex ->
-            logger.warn("LibreTranslate translate failed for '{}': {}", text, ex.message)
+            handleException("translate for '$text'", ex, host)
             null
         }
     }
@@ -156,15 +153,36 @@ class LibreTranslatePlugin(
                     transArray.get(idx)?.asString ?: texts[idx]
                 }
             } else {
-                if (response.statusCode() == HTTP_TOO_MANY_REQUESTS) {
-                    TranslationCache.tripCircuitBreaker()
-                }
+                handleHttpError(response.statusCode(), response.body())
                 null
             }
         }.getOrElse { ex ->
-            logger.warn("LibreTranslate batch failed: {}", ex.message)
+            handleException("batch", ex, host)
             null
         }
+    }
+
+    private fun handleHttpError(statusCode: Int, responseBody: String?) {
+        if (statusCode == HTTP_TOO_MANY_REQUESTS) {
+            TranslationCache.tripCircuitBreaker()
+        }
+        logger.warn("LibreTranslate HTTP {}: {}", statusCode, responseBody)
+        val errorInfo = com.stellar.lang.error.TranslationErrorClassifier.classifyHttpStatus(
+            providerId = id,
+            statusCode = statusCode,
+            responseBody = responseBody,
+        )
+        com.stellar.lang.error.TranslationErrorNotifier.notifyErrorOnce(errorInfo)
+    }
+
+    private fun handleException(context: String, ex: Throwable, host: String) {
+        logger.warn("LibreTranslate {} failed: {}", context, ex.message)
+        val errorInfo = com.stellar.lang.error.TranslationErrorClassifier.classifyException(
+            providerId = id,
+            throwable = ex,
+            host = host,
+        )
+        com.stellar.lang.error.TranslationErrorNotifier.notifyErrorOnce(errorInfo)
     }
 
     fun executeDetect(text: String, host: String, apiKey: String): String? {

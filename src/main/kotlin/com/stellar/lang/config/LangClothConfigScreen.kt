@@ -90,10 +90,20 @@ object LangClothConfigScreen {
             .setSaveConsumer { value -> config.translatePlayerNames.setValue(value, true) }
             .build()
 
+        val errorToastsToggle = entries
+            .startBooleanToggle(Component.literal("Show Error Toasts"), config.showErrorToasts.value())
+            .setDefaultValue(true)
+            .setTooltip(
+                Component.literal("Shows an in-game toast notification explaining the first occurrence of API errors"),
+            )
+            .setSaveConsumer { value -> config.showErrorToasts.setValue(value, true) }
+            .build()
+
         category.addEntry(masterToggle)
         category.addEntry(targetLang)
         category.addEntry(playerNamesToggle)
         category.addEntry(hideIndicators)
+        category.addEntry(errorToastsToggle)
     }
 
     @Suppress("LongMethod")

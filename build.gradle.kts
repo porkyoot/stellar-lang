@@ -24,7 +24,7 @@ tasks.named<JacocoReport>("jacocoTestReport") {
     classDirectories.setFrom(
         classDirectories.files.map {
             fileTree(it) {
-                exclude("**/mixin/**", "**/LangClothConfigScreen*", "**/StellarLangModMenu*", "**/SignTooltipRenderer*", "**/TranslatedBookWidget*")
+                exclude("**/mixin/**", "**/LangClothConfigScreen*", "**/StellarLangModMenu*", "**/SignTooltipRenderer*", "**/TranslatedBookWidget*", "**/StellarToastHelper*")
             }
         }
     )
@@ -35,7 +35,7 @@ tasks.named<JacocoCoverageVerification>("jacocoTestCoverageVerification") {
     classDirectories.setFrom(
         classDirectories.files.map {
             fileTree(it) {
-                exclude("**/mixin/**", "**/LangClothConfigScreen*", "**/StellarLangModMenu*", "**/SignTooltipRenderer*", "**/TranslatedBookWidget*")
+                exclude("**/mixin/**", "**/LangClothConfigScreen*", "**/StellarLangModMenu*", "**/SignTooltipRenderer*", "**/TranslatedBookWidget*", "**/StellarToastHelper*")
             }
         }
     )

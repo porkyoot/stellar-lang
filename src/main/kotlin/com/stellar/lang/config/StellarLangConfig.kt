@@ -90,6 +90,9 @@ class StellarLangConfig : ReflectiveConfig() {
     @Comment("Maximum number of translations to keep in memory/disk cache")
     val maxCacheEntries: TrackedValue<Int> = value(DEFAULT_MAX_CACHE_ENTRIES)
 
+    @Comment("Show in-game toast notifications for the first occurrence of API errors")
+    val showErrorToasts: TrackedValue<Boolean> = value(true)
+
     companion object {
         const val DEFAULT_MAX_CACHE_ENTRIES: Int = 5000
         const val DEFAULT_ONNX_THREADS: Int = 2

@@ -160,8 +160,11 @@ object TranslationCache {
     }
 
     fun tripCircuitBreaker(durationMs: Long = DEFAULT_CIRCUIT_BREAKER_MS) {
+        val wasOpen = isCircuitBreakerOpen()
         circuitBreakerOpenUntil = System.currentTimeMillis() + durationMs
-        logger.warn("Circuit breaker tripped for {} ms due to API rate limit/failure.", durationMs)
+        if (!wasOpen) {
+            logger.warn("Circuit breaker tripped for {} ms due to API rate limit/failure.", durationMs)
+        }
     }
 
     fun isCircuitBreakerOpen(): Boolean {

@@ -143,52 +143,33 @@ class DeepLPlugin(
         return runCatching {
             val chunks = texts.chunked(MAX_BATCH_SIZE)
             val translatedResults = mutableListOf<DeepLTranslationResult>()
+            val endpoint = URI.create(normalizeEndpoint(host, apiKey, "/v2/translate"))
 
             for (chunk in chunks) {
-                val endpoint = URI.create(normalizeEndpoint(host, apiKey, "/v2/translate"))
-                val payload = JsonObject().apply {
-                    val textArray = JsonArray()
-                    chunk.forEach { textArray.add(it) }
-                    add("text", textArray)
-                    addProperty("target_lang", normTarget)
-                    if (normSource != null) {
-                        addProperty("source_lang", normSource)
+                val hasTags = chunk.any { it.contains("<ut>", ignoreCase = true) }
+                val payload = buildChunkPayload(chunk, normSource, normTarget, formality, hasTags)
+                var response = sendDeepLRequest(endpoint, apiKey, payload)
+
+                // If DeepL returned HTTP 400 on XML tag handling, retry chunk with plain text
+                if (response.statusCode() == HTTP_BAD_REQUEST && hasTags) {
+                    logger.warn("DeepL rejected XML tags with HTTP 400. Retrying chunk as sanitized plain text...")
+                    val plainChunk = chunk.map {
+                        com.stellar.lang.format.FormattingTagHelper.decodeFromUntranslatableTags(it)
                     }
-                    if (isValidFormality(formality)) {
-                        addProperty("formality", formality.trim().lowercase())
-                    }
-                    val hasTags = chunk.any { it.contains("<ut>", ignoreCase = true) }
-                    if (hasTags) {
-                        addProperty("tag_handling", "xml")
-                        val ignoreTagsArray = JsonArray().apply { add("ut") }
-                        add("ignore_tags", ignoreTagsArray)
-                    }
+                    val fallbackPayload = buildChunkPayload(
+                        plainChunk,
+                        normSource,
+                        normTarget,
+                        formality,
+                        includeTags = false,
+                    )
+                    response = sendDeepLRequest(endpoint, apiKey, fallbackPayload)
                 }
 
-                val request = HttpRequest.newBuilder()
-                    .uri(endpoint)
-                    .timeout(Duration.ofSeconds(TIMEOUT_SECONDS))
-                    .header(HEADER_AUTHORIZATION, "DeepL-Auth-Key $apiKey")
-                    .header(HEADER_CONTENT_TYPE, APPLICATION_JSON)
-                    .header(HEADER_ACCEPT, APPLICATION_JSON)
-                    .header(HEADER_USER_AGENT, USER_AGENT_VALUE)
-                    .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(payload)))
-                    .build()
-
-                val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
                 if (response.statusCode() in HTTP_OK_MIN..HTTP_OK_MAX) {
                     val json = JsonParser.parseString(response.body()).asJsonObject
-                    val transArray = json.getAsJsonArray("translations") ?: return null
-                    if (transArray.size() != chunk.size) {
-                        logger.warn("DeepL returned {} translations for {} items", transArray.size(), chunk.size)
-                        return null
-                    }
-                    for (i in 0 until transArray.size()) {
-                        val item = transArray.get(i).asJsonObject
-                        val translated = item.get("text")?.asString ?: chunk[i]
-                        val detected = item.get("detected_source_language")?.asString?.lowercase()
-                        translatedResults.add(DeepLTranslationResult(translated, detected))
-                    }
+                    val parsed = parseTranslationResults(json, chunk) ?: return null
+                    translatedResults.addAll(parsed)
                 } else {
                     handleHttpError(response.statusCode(), response.body())
                     return null
@@ -197,8 +178,50 @@ class DeepLPlugin(
             translatedResults
         }.getOrElse { ex ->
             logger.warn("DeepL translation failed: {}", ex.message)
+            val errorInfo = com.stellar.lang.error.TranslationErrorClassifier.classifyException(
+                providerId = id,
+                throwable = ex,
+                host = host,
+            )
+            com.stellar.lang.error.TranslationErrorNotifier.notifyErrorOnce(errorInfo)
             null
         }
+    }
+
+    private fun parseTranslationResults(
+        json: JsonObject,
+        chunk: List<String>,
+    ): List<DeepLTranslationResult>? {
+        val transArray = json.getAsJsonArray("translations") ?: return null
+        if (transArray.size() != chunk.size) {
+            logger.warn("DeepL returned {} translations for {} items", transArray.size(), chunk.size)
+            return null
+        }
+        val results = mutableListOf<DeepLTranslationResult>()
+        for (i in 0 until transArray.size()) {
+            val item = transArray.get(i).asJsonObject
+            val translated = item.get("text")?.asString ?: chunk[i]
+            val detected = item.get("detected_source_language")?.asString?.lowercase()
+            results.add(DeepLTranslationResult(translated, detected))
+        }
+        return results
+    }
+
+    private fun sendDeepLRequest(
+        endpoint: URI,
+        apiKey: String,
+        payload: JsonObject,
+    ): HttpResponse<String> {
+        val request = HttpRequest.newBuilder()
+            .uri(endpoint)
+            .timeout(Duration.ofSeconds(TIMEOUT_SECONDS))
+            .header(HEADER_AUTHORIZATION, "DeepL-Auth-Key $apiKey")
+            .header(HEADER_CONTENT_TYPE, APPLICATION_JSON)
+            .header(HEADER_ACCEPT, APPLICATION_JSON)
+            .header(HEADER_USER_AGENT, USER_AGENT_VALUE)
+            .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(payload)))
+            .build()
+        return httpClient.send(request, HttpResponse.BodyHandlers.ofString())
     }
 
     fun executeDetect(text: String, host: String, apiKey: String): String? {
@@ -211,17 +234,7 @@ class DeepLPlugin(
                 addProperty("target_lang", "EN-US")
             }
 
-            val request = HttpRequest.newBuilder()
-                .uri(endpoint)
-                .timeout(Duration.ofSeconds(TIMEOUT_SECONDS))
-                .header(HEADER_AUTHORIZATION, "DeepL-Auth-Key $apiKey")
-                .header(HEADER_CONTENT_TYPE, APPLICATION_JSON)
-                .header(HEADER_ACCEPT, APPLICATION_JSON)
-                .header(HEADER_USER_AGENT, USER_AGENT_VALUE)
-                .POST(HttpRequest.BodyPublishers.ofString(gson.toJson(payload)))
-                .build()
-
-            val response = httpClient.send(request, HttpResponse.BodyHandlers.ofString())
+            val response = sendDeepLRequest(endpoint, apiKey, payload)
             if (response.statusCode() in HTTP_OK_MIN..HTTP_OK_MAX) {
                 val json = JsonParser.parseString(response.body()).asJsonObject
                 val transArray = json.getAsJsonArray("translations")
@@ -235,7 +248,15 @@ class DeepLPlugin(
                 handleHttpError(response.statusCode(), response.body())
                 null
             }
-        }.getOrNull()
+        }.getOrElse { ex ->
+            val errorInfo = com.stellar.lang.error.TranslationErrorClassifier.classifyException(
+                providerId = id,
+                throwable = ex,
+                host = host,
+            )
+            com.stellar.lang.error.TranslationErrorNotifier.notifyErrorOnce(errorInfo)
+            null
+        }
     }
 
     fun testConnection(
@@ -299,6 +320,12 @@ class DeepLPlugin(
             JsonParser.parseString(responseBody).asJsonObject.get("message")?.asString
         }.getOrNull() ?: responseBody.take(MAX_ERROR_SNIPPET_LENGTH)
         logger.warn("DeepL HTTP {}: {}", statusCode, detail)
+        val errorInfo = com.stellar.lang.error.TranslationErrorClassifier.classifyHttpStatus(
+            providerId = id,
+            statusCode = statusCode,
+            responseBody = detail,
+        )
+        com.stellar.lang.error.TranslationErrorNotifier.notifyErrorOnce(errorInfo)
     }
 
     fun resolveHost(host: String, apiKey: String): String {
@@ -348,10 +375,6 @@ class DeepLPlugin(
         }
     }
 
-    private fun isValidFormality(formality: String): Boolean {
-        return formality.trim().lowercase() in VALID_FORMALITIES
-    }
-
     private fun getConfig(): StellarLangConfig {
         return ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")
             ?: ConfigManager.register(StellarLangMod.MOD_ID, "main", StellarLangConfig::class.java)
@@ -364,6 +387,7 @@ class DeepLPlugin(
         private const val TIMEOUT_SECONDS = 5L
         private const val HTTP_OK_MIN = 200
         private const val HTTP_OK_MAX = 299
+        private const val HTTP_BAD_REQUEST = 400
         private const val HTTP_TOO_MANY_REQUESTS = 429
         private const val HTTP_QUOTA_EXCEEDED = 456
         private const val MAX_BATCH_SIZE = 50
@@ -374,7 +398,40 @@ class DeepLPlugin(
         private const val HEADER_AUTHORIZATION = "Authorization"
         private const val HEADER_USER_AGENT = "User-Agent"
         private const val USER_AGENT_VALUE = "StellarLang/1.0.0"
-
-        private val VALID_FORMALITIES = setOf("more", "less", "prefer_more", "prefer_less")
     }
+}
+
+private val VALID_FORMALITIES = setOf("more", "less", "prefer_more", "prefer_less")
+
+private fun isValidFormality(formality: String): Boolean {
+    return formality.trim().lowercase() in VALID_FORMALITIES
+}
+
+private fun buildChunkPayload(
+    chunk: List<String>,
+    normSource: String?,
+    normTarget: String,
+    formality: String,
+    includeTags: Boolean,
+): JsonObject {
+    val payload = JsonObject()
+    val textArray = JsonArray()
+    for (item in chunk) {
+        textArray.add(item)
+    }
+    payload.add("text", textArray)
+    payload.addProperty("target_lang", normTarget)
+    if (normSource != null) {
+        payload.addProperty("source_lang", normSource)
+    }
+    if (isValidFormality(formality)) {
+        payload.addProperty("formality", formality.trim().lowercase())
+    }
+    if (includeTags) {
+        payload.addProperty("tag_handling", "xml")
+        val ignoreTagsArray = JsonArray()
+        ignoreTagsArray.add("ut")
+        payload.add("ignore_tags", ignoreTagsArray)
+    }
+    return payload
 }

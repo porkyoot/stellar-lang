@@ -27,6 +27,8 @@ class OnnxTranslationPlugin : TranslationPlugin {
             if (config?.onnxAutoDownload?.value() == true) {
                 OnnxModelManager.downloadTranslationModelAsync(targetLang)
             }
+            val errorInfo = com.stellar.lang.error.TranslationErrorClassifier.classifyModelNotReady(id, targetLang)
+            com.stellar.lang.error.TranslationErrorNotifier.notifyErrorOnce(errorInfo)
         }
         return translated
     }

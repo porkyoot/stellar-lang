@@ -53,6 +53,7 @@ object TranslationService {
     private const val UNKNOWN_LANG = "unknown"
     private const val MAX_ATTEMPTS_PER_PROVIDER = 2
     private const val RETRY_DELAY_MS = 50L
+    private const val LIBRETRANSLATE_PROVIDER_ID = "libretranslate"
 
     @Volatile
     private var lastNetworkException: Throwable? = null
@@ -897,12 +898,24 @@ object TranslationService {
                     TranslationCache.tripCircuitBreaker()
                 }
                 logger.warn("LibreTranslate responded with HTTP {}: {}", response.statusCode(), response.body())
+                val errorInfo = com.stellar.lang.error.TranslationErrorClassifier.classifyHttpStatus(
+                    providerId = LIBRETRANSLATE_PROVIDER_ID,
+                    statusCode = response.statusCode(),
+                    responseBody = response.body(),
+                )
+                com.stellar.lang.error.TranslationErrorNotifier.notifyErrorOnce(errorInfo)
                 null
             }
         }.getOrElse { ex ->
             lastNetworkException = ex
             val errorDetail = ex.message ?: ex::class.simpleName ?: ex.toString()
             logger.warn("LibreTranslate request failed for '{}': {}", text, errorDetail)
+            val errorInfo = com.stellar.lang.error.TranslationErrorClassifier.classifyException(
+                providerId = LIBRETRANSLATE_PROVIDER_ID,
+                throwable = ex,
+                host = host,
+            )
+            com.stellar.lang.error.TranslationErrorNotifier.notifyErrorOnce(errorInfo)
             null
         }
     }
@@ -933,12 +946,24 @@ object TranslationService {
                 if (response.statusCode() == HTTP_TOO_MANY_REQUESTS) {
                     TranslationCache.tripCircuitBreaker()
                 }
+                val errorInfo = com.stellar.lang.error.TranslationErrorClassifier.classifyHttpStatus(
+                    providerId = LIBRETRANSLATE_PROVIDER_ID,
+                    statusCode = response.statusCode(),
+                    responseBody = response.body(),
+                )
+                com.stellar.lang.error.TranslationErrorNotifier.notifyErrorOnce(errorInfo)
                 null
             }
         }.onFailure { ex ->
             lastNetworkException = ex
             val errorDetail = ex.message ?: ex::class.simpleName ?: ex.toString()
             logger.warn("LibreTranslate batch request failed for {} items: {}", texts.size, errorDetail)
+            val errorInfo = com.stellar.lang.error.TranslationErrorClassifier.classifyException(
+                providerId = LIBRETRANSLATE_PROVIDER_ID,
+                throwable = ex,
+                host = host,
+            )
+            com.stellar.lang.error.TranslationErrorNotifier.notifyErrorOnce(errorInfo)
         }.getOrNull()
     }
 

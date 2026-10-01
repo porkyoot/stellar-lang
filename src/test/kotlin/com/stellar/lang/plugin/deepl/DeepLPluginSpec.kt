@@ -20,6 +20,7 @@ class DeepLPluginSpec : FunSpec({
     var responseBody = """{"translations":[{"detected_source_language":"EN","text":"Hallo"}]}"""
     var lastReceivedBody = ""
     var dynamicBatch = false
+    var tagRejectionTest = false
 
     beforeSpec {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -27,7 +28,11 @@ class DeepLPluginSpec : FunSpec({
 
         server.createContext("/v2/translate") { exchange ->
             lastReceivedBody = exchange.requestBody.reader().readText()
-            val body = if (dynamicBatch && responseCode.get() == 200) {
+            val isTagRejection = tagRejectionTest && lastReceivedBody.contains("tag_handling")
+            val code = if (isTagRejection) 400 else responseCode.get()
+            val body = if (isTagRejection) {
+                """{"message":"Tag handling parsing failed"}"""
+            } else if (dynamicBatch && code == 200) {
                 val count = runCatching {
                     com.google.gson.JsonParser.parseString(lastReceivedBody).asJsonObject.getAsJsonArray("text").size()
                 }.getOrDefault(1)
@@ -37,7 +42,7 @@ class DeepLPluginSpec : FunSpec({
                 responseBody
             }
             val bytes = body.toByteArray()
-            exchange.sendResponseHeaders(responseCode.get(), bytes.size.toLong())
+            exchange.sendResponseHeaders(code, bytes.size.toLong())
             exchange.responseBody.write(bytes)
             exchange.close()
         }
@@ -54,6 +59,7 @@ class DeepLPluginSpec : FunSpec({
         responseBody = """{"translations":[{"detected_source_language":"EN","text":"Hallo"}]}"""
         lastReceivedBody = ""
         dynamicBatch = false
+        tagRejectionTest = false
         TranslationCache.resetCircuitBreaker()
 
         val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")
@@ -202,6 +208,14 @@ class DeepLPluginSpec : FunSpec({
         val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")!!
         config.deeplApiHost.setValue("http://127.0.0.1:1", false)
         plugin.translate("Fail", "en", "de") shouldBe null
+    }
+
+    test("translate handles HTTP 400 tag rejection by falling back to plain text") {
+        val plugin = DeepLPlugin()
+        tagRejectionTest = true
+        val result = plugin.translate("<ut>§a</ut>Hello", "en", "de")
+        result shouldBe "Hallo"
+        lastReceivedBody.contains("tag_handling") shouldBe false
     }
 
     test("detectLanguage parses detected_source_language and handles non-letter text") {
