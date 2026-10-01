@@ -56,6 +56,8 @@ object TranslationService {
     private const val LIBRETRANSLATE_PROVIDER_ID = "libretranslate"
     private const val MIN_LIBRE_CONFIDENCE = 80.0f
     private const val DEFAULT_CONFIDENCE = 100f
+    private const val SHORT_TEXT_THRESHOLD = 25
+    private const val SHORT_TEXT_WORD_COUNT = 3
 
     @Volatile
     private var lastNetworkException: Throwable? = null
@@ -596,12 +598,14 @@ object TranslationService {
                 formality,
             )?.firstOrNull() ?: return null
 
-            val effectiveDetected = detailed.detectedSourceLanguage ?: detectedLang.takeIf { it != UNKNOWN_LANG }
+            val rawDetected = detailed.detectedSourceLanguage ?: detectedLang.takeIf { it != UNKNOWN_LANG }
+            val effectiveDetected = resolveDeepLEffectiveLanguage(rawDetected, text, targetLang)
             val isSame = isSameLanguage(effectiveDetected, targetLang)
-            return if (!isUntranslatedFailure(text, detailed.translatedText, effectiveDetected, targetLang)) {
+            val effectiveTrans = if (isSame) text else detailed.translatedText
+            return if (!isUntranslatedFailure(text, effectiveTrans, effectiveDetected, targetLang)) {
                 TranslationResult(
                     originalText = text,
-                    translatedText = detailed.translatedText,
+                    translatedText = effectiveTrans,
                     detectedLanguage = effectiveDetected ?: UNKNOWN_LANG,
                     targetLanguage = targetLang,
                     isSameLanguage = isSame,
@@ -658,8 +662,9 @@ object TranslationService {
         }
 
         val encodedTexts = texts.map {
+            val protected = com.stellar.lang.plugin.LanguageDetectionHelper.protectTextmojisAndKaomojis(it)
             com.stellar.lang.player.PlayerNameHelper.protectPlayerNames(
-                com.stellar.lang.format.FormattingTagHelper.encodeToUntranslatableTags(it),
+                com.stellar.lang.format.FormattingTagHelper.encodeToUntranslatableTags(protected),
             )
         }
 
@@ -810,11 +815,13 @@ object TranslationService {
                 val detailed = detailedList.getOrElse(index) {
                     com.stellar.lang.plugin.deepl.DeepLPlugin.DeepLTranslationResult(original, null)
                 }
-                val effectiveDetected = detailed.detectedSourceLanguage ?: detectedLang.takeIf { it != UNKNOWN_LANG }
+                val rawDetected = detailed.detectedSourceLanguage ?: detectedLang.takeIf { it != UNKNOWN_LANG }
+                val effectiveDetected = resolveDeepLEffectiveLanguage(rawDetected, original, targetLang)
                 val isSame = isSameLanguage(effectiveDetected, targetLang)
+                val effectiveTrans = if (isSame) original else detailed.translatedText
                 TranslationResult(
                     originalText = original,
-                    translatedText = detailed.translatedText,
+                    translatedText = effectiveTrans,
                     detectedLanguage = effectiveDetected ?: UNKNOWN_LANG,
                     targetLanguage = targetLang,
                     isSameLanguage = isSame,
@@ -852,6 +859,52 @@ object TranslationService {
                 }
             }
         }
+    }
+
+    @Suppress(
+        "ComplexCondition",
+        "CyclomaticComplexMethod",
+        "ReturnCount",
+        "MagicNumber",
+        "UnnecessaryParentheses",
+    )
+    private fun resolveDeepLEffectiveLanguage(
+        rawDetected: String?,
+        text: String,
+        targetLang: String,
+    ): String? {
+        val cleanDetected = rawDetected?.trim()?.lowercase()?.substringBefore('-')
+        val isTargetEn = isSameLanguage(targetLang, "en")
+        val hasMarkers = com.stellar.lang.plugin.LanguageDetectionHelper.hasForeignMarkers(text)
+        val isSlang = com.stellar.lang.plugin.LanguageDetectionHelper.isUniversalSlang(text)
+        val quickLang = com.stellar.lang.plugin.LanguageDetectionHelper.detectQuick(text)
+
+        if (isTargetEn && !hasMarkers) {
+            if (cleanDetected == null || cleanDetected == UNKNOWN_LANG) {
+                return "en"
+            }
+            if (cleanDetected != "en") {
+                val isShort = text.length <= SHORT_TEXT_THRESHOLD ||
+                    text.split(Regex("\\s+")).filter { it.isNotEmpty() }.size <= SHORT_TEXT_WORD_COUNT
+                val hasRepeating = text.contains(Regex("(.)\\1{2,}"))
+                val isQuickEn = quickLang == "en"
+                val isQuickMatch = quickLang != null && quickLang == cleanDetected
+                val isCommonEuro = cleanDetected in setOf("fr", "de", "es")
+
+                if (isSlang || isQuickEn || hasRepeating || isShort && !isQuickMatch && !isCommonEuro) {
+                    return "en"
+                }
+            }
+        }
+
+        if (cleanDetected != null && cleanDetected != "en" && !hasMarkers) {
+            val isQuickEn = quickLang == "en"
+            if (isSlang || isQuickEn) {
+                return "en"
+            }
+        }
+
+        return cleanDetected ?: rawDetected
     }
 
     private fun isNonRetryableException(ex: Throwable?): Boolean {

@@ -6,6 +6,12 @@
     "LargeClass",
     "LongMethod",
     "ReturnCount",
+    "CyclomaticComplexMethod",
+    "ComplexCondition",
+    "NestedBlockDepth",
+    "TooManyFunctions",
+    "MagicNumber",
+    "UnnecessaryParentheses",
 )
 
 package com.stellar.lang.plugin.deepl
@@ -71,7 +77,14 @@ class DeepLPlugin(
 
     override suspend fun translate(text: String, sourceLang: String?, targetLang: String): String? {
         val trimmed = text.trim()
-        if (trimmed.isEmpty()) return text
+        if (trimmed.isEmpty() || com.stellar.lang.plugin.LanguageDetectionHelper.isEmoticonOrKaomoji(trimmed)) {
+            return text
+        }
+        if (com.stellar.lang.plugin.LanguageDetectionHelper.isUniversalSlang(trimmed) &&
+            targetLang.lowercase().startsWith("en")
+        ) {
+            return text
+        }
 
         val config = getConfig()
         val apiKey = config.deeplApiKey.value().trim()
@@ -201,10 +214,38 @@ class DeepLPlugin(
         for (i in 0 until transArray.size()) {
             val item = transArray.get(i).asJsonObject
             val translated = item.get("text")?.asString ?: chunk[i]
-            val detected = item.get("detected_source_language")?.asString?.lowercase()
+            val raw = item.get("detected_source_language")?.asString
+            val detected = parseDeepLDetect(raw, chunk[i])
             results.add(DeepLTranslationResult(translated, detected))
         }
         return results
+    }
+
+    fun parseDeepLDetect(rawLang: String?, text: String): String? {
+        if (rawLang.isNullOrBlank()) return null
+        val cleanLang = rawLang.trim().lowercase().substringBefore('-')
+        if (cleanLang !in com.stellar.lang.plugin.LanguageDetectionHelper.SUPPORTED_LANGUAGES) {
+            return null
+        }
+
+        if (cleanLang != "en") {
+            if (com.stellar.lang.plugin.LanguageDetectionHelper.isUniversalSlang(text) ||
+                com.stellar.lang.plugin.LanguageDetectionHelper.detectQuick(text) == "en"
+            ) {
+                return null
+            }
+            if (!com.stellar.lang.plugin.LanguageDetectionHelper.hasForeignMarkers(text)) {
+                val hasRepeating = text.contains(Regex("(.)\\1{2,}"))
+                val isShort = text.length <= SHORT_TEXT_THRESHOLD ||
+                    text.split(Regex("\\s+")).filter { it.isNotEmpty() }.size <= SHORT_TEXT_WORD_COUNT
+                val quickMatch = com.stellar.lang.plugin.LanguageDetectionHelper.detectQuick(text)
+                if (hasRepeating || isShort && quickMatch != cleanLang && cleanLang !in COMMON_EUROPEAN_LANGS) {
+                    return null
+                }
+            }
+        }
+
+        return cleanLang
     }
 
     private fun sendDeepLRequest(
@@ -225,6 +266,14 @@ class DeepLPlugin(
     }
 
     fun executeDetect(text: String, host: String, apiKey: String): String? {
+        if (com.stellar.lang.plugin.LanguageDetectionHelper.isUniversalSlang(text)) {
+            return null
+        }
+        val quick = com.stellar.lang.plugin.LanguageDetectionHelper.detectQuick(text)
+        if (quick == "en") {
+            return "en"
+        }
+
         return runCatching {
             val endpoint = URI.create(normalizeEndpoint(host, apiKey, "/v2/translate"))
             val payload = JsonObject().apply {
@@ -240,7 +289,8 @@ class DeepLPlugin(
                 val transArray = json.getAsJsonArray("translations")
                 if (transArray != null && !transArray.isEmpty) {
                     val first = transArray.get(0).asJsonObject
-                    first.get("detected_source_language")?.asString?.lowercase()
+                    val raw = first.get("detected_source_language")?.asString
+                    parseDeepLDetect(raw, text)
                 } else {
                     null
                 }
@@ -398,6 +448,9 @@ class DeepLPlugin(
         private const val HEADER_AUTHORIZATION = "Authorization"
         private const val HEADER_USER_AGENT = "User-Agent"
         private const val USER_AGENT_VALUE = "StellarLang/1.0.0"
+        private const val SHORT_TEXT_THRESHOLD = 25
+        private const val SHORT_TEXT_WORD_COUNT = 3
+        private val COMMON_EUROPEAN_LANGS = setOf("fr", "de", "es")
     }
 }
 

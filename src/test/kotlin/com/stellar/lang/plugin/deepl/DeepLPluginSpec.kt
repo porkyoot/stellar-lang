@@ -1,3 +1,5 @@
+@file:Suppress("LargeClass")
+
 package com.stellar.lang.plugin.deepl
 
 import com.stellar.core.config.ConfigManager
@@ -5,6 +7,7 @@ import com.stellar.lang.StellarLangMod
 import com.stellar.lang.config.StellarLangConfig
 import com.stellar.lang.plugin.PluginStatus
 import com.stellar.lang.service.TranslationCache
+import com.stellar.lang.service.TranslationService
 import com.sun.net.httpserver.HttpServer
 import io.kotest.core.spec.style.FunSpec
 import io.kotest.matchers.shouldBe
@@ -300,5 +303,135 @@ class DeepLPluginSpec : FunSpec({
         val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")!!
         config.deeplApiKey.setValue("", false)
         plugin.translateBatch(listOf("Hello"), "en", "de") shouldBe null
+    }
+
+    test("parseDeepLDetect enforces thresholds and rejects slang/broken English") {
+        val plugin = DeepLPlugin()
+
+        // Null / blank / unsupported
+        plugin.parseDeepLDetect(null, "text") shouldBe null
+        plugin.parseDeepLDetect("   ", "text") shouldBe null
+        plugin.parseDeepLDetect("xx", "text") shouldBe null
+        plugin.parseDeepLDetect("klingon", "text") shouldBe null
+
+        // English input
+        plugin.parseDeepLDetect("EN", "Hello world") shouldBe "en"
+        plugin.parseDeepLDetect("EN-US", "Hello world") shouldBe "en"
+        plugin.parseDeepLDetect("en-gb", "Colour") shouldBe "en"
+
+        // Universal slang and textmojis rejected
+        plugin.parseDeepLDetect("ID", "ok") shouldBe null
+        plugin.parseDeepLDetect("ID", "lmao") shouldBe null
+        plugin.parseDeepLDetect("ID", "lol") shouldBe null
+        plugin.parseDeepLDetect("ID", "xd") shouldBe null
+        plugin.parseDeepLDetect("JA", "¯\\_(ツ)_/¯") shouldBe null
+        plugin.parseDeepLDetect("JA", "(╯°□°)╯︵ ┻━┻") shouldBe null
+        plugin.parseDeepLDetect("FR", "looooool") shouldBe null
+
+        // Broken English rejected
+        plugin.parseDeepLDetect("ID", "why u kill me") shouldBe null
+        plugin.parseDeepLDetect("ID", "wat r u doing") shouldBe null
+        plugin.parseDeepLDetect("TL", "pls come base") shouldBe null
+        plugin.parseDeepLDetect("IT", "no u") shouldBe null
+
+        // Repeating characters with plain Latin rejected
+        plugin.parseDeepLDetect("NL", "heeeelp") shouldBe null
+        plugin.parseDeepLDetect("ET", "noooooo") shouldBe null
+
+        // Obscure non-European language on short plain Latin text rejected
+        plugin.parseDeepLDetect("ID", "short text") shouldBe null
+        plugin.parseDeepLDetect("TL", "some words here") shouldBe null
+
+        // Genuine French, Spanish, German accepted
+        plugin.parseDeepLDetect("FR", "Bonjour le monde") shouldBe "fr"
+        plugin.parseDeepLDetect("ES", "Hola amigo") shouldBe "es"
+        plugin.parseDeepLDetect("DE", "Wie gehts") shouldBe "de"
+        plugin.parseDeepLDetect("FR", "Ta mère est pas là") shouldBe "fr"
+        plugin.parseDeepLDetect("DE", "Schöne Grüße") shouldBe "de"
+
+        // Genuine non-Latin scripts accepted
+        plugin.parseDeepLDetect("RU", "Привет мир") shouldBe "ru"
+        plugin.parseDeepLDetect("JA", "こんにちは") shouldBe "ja"
+    }
+
+    test("translate immediately returns textmojis and universal slang for English target without network") {
+        val plugin = DeepLPlugin()
+
+        plugin.translate("¯\\_(ツ)_/¯", null, "de") shouldBe "¯\\_(ツ)_/¯"
+        plugin.translate("(╯°□°)╯︵ ┻━┻", null, "fr") shouldBe "(╯°□°)╯︵ ┻━┻"
+        plugin.translate("ok", null, "en") shouldBe "ok"
+        plugin.translate("lmao", null, "en") shouldBe "lmao"
+    }
+
+    test("detectLanguage handles universal slang and broken English") {
+        val plugin = DeepLPlugin()
+
+        plugin.detectLanguage("¯\\_(ツ)_/¯") shouldBe null
+        plugin.detectLanguage("ok") shouldBe null
+        plugin.detectLanguage("lmao") shouldBe null
+        plugin.detectLanguage("why u kill me") shouldBe "en"
+    }
+
+    test("executeBatchTranslateDetailed applies parseDeepLDetect filtering on detected source language") {
+        val plugin = DeepLPlugin()
+
+        responseBody = """{"translations":[{"detected_source_language":"ID","text":"translated"}]}"""
+        val results = plugin.executeBatchTranslateDetailed(
+            listOf("why u kill me"),
+            null,
+            "en",
+            "http://127.0.0.1:$serverPort",
+            "test_key:fx",
+        )
+        results shouldNotBe null
+        results?.firstOrNull()?.detectedSourceLanguage shouldBe null
+
+        responseBody = """{"translations":[{"detected_source_language":"FR","text":"Hello world"}]}"""
+        val frResults = plugin.executeBatchTranslateDetailed(
+            listOf("Bonjour le monde"),
+            null,
+            "en",
+            "http://127.0.0.1:$serverPort",
+            "test_key:fx",
+        )
+        frResults shouldNotBe null
+        frResults?.firstOrNull()?.detectedSourceLanguage shouldBe "fr"
+        frResults?.firstOrNull()?.translatedText shouldBe "Hello world"
+    }
+
+    test("TranslationService with DeepL handles broken English, textmojis, and genuine translation") {
+        val config = ConfigManager.get<StellarLangConfig>(StellarLangMod.MOD_ID, "main")!!
+        config.deeplApiHost.setValue("http://127.0.0.1:$serverPort", false)
+        config.deeplApiKey.setValue("test_key:fx", false)
+        config.translationPlugin.setValue("deepl", false)
+        config.targetLanguage.setValue("en", false)
+
+        TranslationCache.clear()
+
+        // 1. Textmoji: should be returned as same language
+        val textmojiRes = TranslationService.translateBatchSync(listOf("¯\\_(ツ)_/¯"))?.firstOrNull()
+        textmojiRes shouldNotBe null
+        textmojiRes?.translatedText shouldBe "¯\\_(ツ)_/¯"
+        textmojiRes?.isSameLanguage shouldBe true
+
+        // 2. Slang: should be returned as same language
+        val slangRes = TranslationService.translateBatchSync(listOf("lmao"))?.firstOrNull()
+        slangRes shouldNotBe null
+        slangRes?.translatedText shouldBe "lmao"
+        slangRes?.isSameLanguage shouldBe true
+
+        // 3. Broken English: should be returned as same language
+        val brokenEngRes = TranslationService.translateBatchSync(listOf("why u kill me"))?.firstOrNull()
+        brokenEngRes shouldNotBe null
+        brokenEngRes?.translatedText shouldBe "why u kill me"
+        brokenEngRes?.isSameLanguage shouldBe true
+
+        // 4. Batch translation with DeepL
+        responseBody = """{"translations":[{"detected_source_language":"FR","text":"Hello world"}]}"""
+        val batchRes = TranslationService.translateBatchSync(listOf("Bonjour le monde"))
+        batchRes shouldNotBe null
+        batchRes?.firstOrNull()?.translatedText shouldBe "Hello world"
+        batchRes?.firstOrNull()?.detectedLanguage shouldBe "fr"
+        batchRes?.firstOrNull()?.isSameLanguage shouldBe false
     }
 })
