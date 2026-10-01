@@ -167,6 +167,9 @@ object FormattingTagHelper {
         if (str.contains('§')) {
             str = FORMATTING_CODE_PATTERN.matcher(str).replaceAll("")
         }
+        if (str.contains('\uFFFC')) {
+            str = str.replace("\uFFFC", "")
+        }
         return str
     }
 

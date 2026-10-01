@@ -6,6 +6,7 @@
     "CyclomaticComplexMethod",
     "NestedBlockDepth",
     "LabeledExpression",
+    "StringLiteralDuplication",
 )
 
 package com.stellar.lang.chat
@@ -56,8 +57,10 @@ object ChatTranslationManager {
     // Matches standard player chat prefixes, with or without Chat Heads player sprites:
     // e.g. "<[Porkyoot head]Porkyoot> ", "<Dev1lroot> ", "[VIP] <Dev1lroot> ", "Dev1lroot: ", "Dev1lroot » "
     private val CHAT_PREFIX_REGEX = Pattern.compile(
-        """^(\s*(?:\[[^\]]*\]\s*)*<[^>]+>\s*|^\s*\[[^\]]+\]\s+<\w+>\s*|^\s*[\w\u00A7]{2,20}\s*[:»>]\s*)""",
+        """^(\s*(?:[\uFFFC\s]|\[[^\]]*\])*<[^>]+>\s*|^\s*(?:[\uFFFC\s]|\[[^\]]*\])*[\w\u00A7]{2,20}\s*[:»>]\s*)""",
     )
+
+    private val TRANSLATABLE_FORMAT_PATTERN = Pattern.compile("""%(?:(\d+)\$)?([A-Za-z%]|$)""")
 
     private val DEATH_PATTERN = Pattern.compile(
         """\b(?:was slain by|was shot by|was blown up by|was killed by|was squashed by|was pricked to death|""" +
@@ -119,6 +122,7 @@ object ChatTranslationManager {
             for (tracked in trackedMessages.values) {
                 if (tracked.messageText == result.originalText && tracked.isPending) {
                     tracked.isPending = false
+                    tracked.translationResult = result
                     tracked.translatedComponent = null
                     scheduleChatRefresh(tracked)
                 }
@@ -128,6 +132,7 @@ object ChatTranslationManager {
         for (tracked in trackedMessages.values) {
             if (tracked.messageText == result.originalText) {
                 tracked.isPending = false
+                tracked.translationResult = result
                 val translated = createTranslatedComponent(tracked.id, result, tracked.prefixComponent)
                 tracked.translatedComponent = translated
                 scheduleChatRefresh(tracked)
@@ -147,6 +152,7 @@ object ChatTranslationManager {
         val prefixComponent: Component? = null,
         val messageText: String = plainText,
         var translatedComponent: Component? = null,
+        var translationResult: TranslationResult? = null,
         var isShowingOriginal: Boolean = false,
         @Volatile var isPending: Boolean = false,
         @Volatile var currentAttempt: Long = 0L,
@@ -161,13 +167,89 @@ object ChatTranslationManager {
         }
     }
 
+    internal fun flattenComponent(component: Component, parentStyle: Style = Style.EMPTY): List<Component> {
+        val list = mutableListOf<Component>()
+        fun walk(comp: Component, inheritedStyle: Style) {
+            val currentStyle = comp.style.applyTo(inheritedStyle)
+            val contents = comp.contents
+            if (contents is TranslatableContents) {
+                decomposeTranslatable(contents, currentStyle) { child, s ->
+                    walk(child, s)
+                }
+            } else if (contents !is PlainTextContents || contents.text().isNotEmpty()) {
+                val leaf = comp.plainCopy().setStyle(currentStyle)
+                list.add(leaf)
+            }
+            for (sibling in comp.siblings) {
+                walk(sibling, currentStyle)
+            }
+        }
+        walk(component, parentStyle)
+        return list
+    }
+
+    private fun getTranslatableFormat(contents: TranslatableContents): String {
+        val language = net.minecraft.locale.Language.getInstance()
+        val format = language.getOrDefault(contents.key)
+        val fallback = contents.fallback
+        return if (format == contents.key && fallback != null) fallback else format
+    }
+
+    private fun handleTranslatableMatch(
+        matcher: java.util.regex.Matcher,
+        args: Array<out Any?>,
+        argIndex: Int,
+        style: Style,
+        walker: (Component, Style) -> Unit,
+    ): Int {
+        var nextArgIndex = argIndex
+        when (matcher.group()) {
+            "%%" -> walker(Component.literal("%").setStyle(style), style)
+            "%n" -> walker(Component.literal("\n").setStyle(style), style)
+            else -> {
+                val pos = matcher.group(1)
+                val index = pos?.let { it.toInt() - 1 } ?: nextArgIndex++
+                if (index in args.indices) {
+                    val arg = args[index]
+                    if (arg is Component) {
+                        walker(arg, style)
+                    } else if (arg != null) {
+                        walker(Component.literal(arg.toString()).setStyle(style), style)
+                    }
+                }
+            }
+        }
+        return nextArgIndex
+    }
+
+    private fun decomposeTranslatable(
+        contents: TranslatableContents,
+        style: Style,
+        walker: (Component, Style) -> Unit,
+    ) {
+        val format = getTranslatableFormat(contents)
+        val matcher = TRANSLATABLE_FORMAT_PATTERN.matcher(format)
+        var cursor = 0
+        var argIndex = 0
+        val args = contents.args
+
+        while (matcher.find()) {
+            if (matcher.start() > cursor) {
+                walker(Component.literal(format.substring(cursor, matcher.start())).setStyle(style), style)
+            }
+            cursor = matcher.end()
+            argIndex = handleTranslatableMatch(matcher, args, argIndex, style, walker)
+        }
+        if (cursor < format.length) {
+            walker(Component.literal(format.substring(cursor)).setStyle(style), style)
+        }
+    }
+
     fun extractChatPayload(component: Component): ParsedChatPayload {
-        val config = TranslationService.getConfig()
-        val flatList = component.toFlatList()
+        val flatList = flattenComponent(component)
         val fullText = flatList.joinToString("") { it.string }
         val matcher = CHAT_PREFIX_REGEX.matcher(fullText)
-        val shouldExtractPrefix = !config.translatePlayerNames.value()
-        val hasPrefix = shouldExtractPrefix && matcher.find() && matcher.start() == 0
+        val hasPrefix = matcher.find() && matcher.start() == 0
         if (!hasPrefix) {
             val formatted = com.stellar.lang.format.FormattingTagHelper.componentToFormattedText(component).trim()
             return ParsedChatPayload(null, formatted.ifEmpty { fullText.trim() })
@@ -205,7 +287,11 @@ object ChatTranslationManager {
             if (currentLen < prefixLength) {
                 val skip = prefixLength - currentLen
                 val remainingText = str.substring(skip)
-                result.append(Component.literal(remainingText).setStyle(comp.style))
+                if (comp.contents is PlainTextContents) {
+                    result.append(Component.literal(remainingText).setStyle(comp.style))
+                } else {
+                    result.append(comp)
+                }
                 currentLen += compLen
             } else {
                 result.append(comp)
@@ -226,12 +312,7 @@ object ChatTranslationManager {
             val compLen = str.length
             if (compLen > 0) {
                 if (currentLen + compLen <= prefixLength) {
-                    val flatComp = if (comp.siblings.isEmpty() && comp.contents is PlainTextContents) {
-                        comp
-                    } else {
-                        Component.literal(str).setStyle(comp.style)
-                    }
-                    prefixComponents.add(flatComp)
+                    prefixComponents.add(comp)
                     currentLen += compLen
                 } else {
                     val needed = prefixLength - currentLen
@@ -250,7 +331,11 @@ object ChatTranslationManager {
     private fun sliceComponent(comp: Component, needed: Int): Component {
         val str = comp.string
         val slicedText = if (needed <= str.length) str.substring(0, needed) else str
-        return Component.literal(slicedText).setStyle(comp.style)
+        return if (comp.contents is PlainTextContents) {
+            Component.literal(slicedText).setStyle(comp.style)
+        } else {
+            comp
+        }
     }
 
     @Suppress("ReturnCount")
@@ -317,6 +402,7 @@ object ChatTranslationManager {
             if (cached.isSameLanguage) {
                 return component
             }
+            tracked.translationResult = cached
             val translated = createTranslatedComponent(id, cached, payload.prefixComponent)
             tracked.translatedComponent = translated
             return translated
@@ -574,6 +660,30 @@ object ChatTranslationManager {
         )
     }
 
+    fun createOriginalComponent(
+        id: Long,
+        result: TranslationResult,
+        prefixComponent: Component? = null,
+    ): MutableComponent {
+        val flagChar = com.stellar.lang.badge.LanguageFlagHelper.getFlagChar(result.detectedLanguage)
+        val flagEmoji = com.stellar.lang.badge.LanguageFlagHelper.getFlagEmoji(result.detectedLanguage)
+        val langName = com.stellar.lang.badge.LanguageFlagHelper.getLanguageName(result.detectedLanguage)
+        val hoverComponent = Component.empty()
+            .append(Component.literal("$flagEmoji "))
+            .append(Component.translatable("stellar_lang.chat.translated_from", langName))
+            .append(Component.literal("\n"))
+            .append(Component.translatable("stellar_lang.chat.original", result.originalText))
+            .append(Component.literal("\n"))
+            .append(Component.translatable("stellar_lang.chat.toggle_hover"))
+        return buildChatComponent(
+            id = id,
+            content = result.originalText,
+            prefixComponent = prefixComponent,
+            hoverComponent = hoverComponent,
+            badgeStyle = ChatBadgeStyle("$flagChar ", ChatFormatting.GRAY, isStrikethrough = true),
+        )
+    }
+
     private fun buildToggleCommand(id: Long): String = "$COMMAND_PREFIX $id"
 
     private fun scheduleChatRefresh(tracked: TrackedChatMessage) {
@@ -598,8 +708,10 @@ object ChatTranslationManager {
     internal fun updateChatDisplayWithAccessor(accessor: ChatComponentAccessor, tracked: TrackedChatMessage) {
         val messages = accessor.stellarGetAllMessages()
 
-        val activeContent = if (tracked.isShowingOriginal) {
-            tracked.originalComponent
+        var activeContent = if (tracked.isShowingOriginal) {
+            tracked.translationResult?.let { result ->
+                createOriginalComponent(tracked.id, result, tracked.prefixComponent)
+            } ?: tracked.originalComponent
         } else {
             tracked.translatedComponent ?: tracked.originalComponent
         }
@@ -608,6 +720,16 @@ object ChatTranslationManager {
 
         if (index != -1) {
             val oldMsg = messages[index]
+            val oldLeaves = flattenComponent(oldMsg.content())
+            val firstOldLeaf = oldLeaves.firstOrNull()
+            if (firstOldLeaf != null && firstOldLeaf.contents !is PlainTextContents) {
+                val activeLeaves = flattenComponent(activeContent)
+                val firstActiveLeaf = activeLeaves.firstOrNull()
+                if (firstActiveLeaf == null || firstActiveLeaf.contents is PlainTextContents) {
+                    activeContent = Component.empty().append(firstOldLeaf).append(activeContent)
+                }
+            }
+
             val newMsg = GuiMessage(
                 oldMsg.addedTime(),
                 activeContent,
@@ -641,7 +763,11 @@ object ChatTranslationManager {
         val matchesText = text == tracked.plainText ||
             tracked.translatedComponent != null && text == tracked.translatedComponent?.string
 
-        return matchesCommand || matchesText
+        val cleanText = text.replaceFirst(Regex("""^\s*(?:\uFFFC|\[[^\]]*\])\s*"""), "")
+        val matchesStrippedText = cleanText == tracked.plainText ||
+            tracked.translatedComponent != null && cleanText == tracked.translatedComponent?.string
+
+        return matchesCommand || matchesText || matchesStrippedText
     }
 
     private fun matchesComponentExact(content: Component, tracked: TrackedChatMessage): Boolean {
@@ -667,6 +793,19 @@ object ChatTranslationManager {
                 val data = getMethod.invoke(source)
                 if (data != null) {
                     setMethod.invoke(target, data)
+                    return
+                }
+            }
+            val sourceField = (source.javaClass.fields + source.javaClass.declaredFields)
+                .firstOrNull { it.name.contains("chatheads") && it.name.contains("headData") }
+            val targetField = (target.javaClass.fields + target.javaClass.declaredFields)
+                .firstOrNull { it.name.contains("chatheads") && it.name.contains("headData") }
+            if (sourceField != null && targetField != null) {
+                sourceField.isAccessible = true
+                targetField.isAccessible = true
+                val data = sourceField.get(source)
+                if (data != null) {
+                    targetField.set(target, data)
                 }
             }
         }

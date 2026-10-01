@@ -1,4 +1,4 @@
-@file:Suppress("LargeClass")
+@file:Suppress("LargeClass", "VariableNaming")
 
 package com.stellar.lang.chat
 
@@ -12,6 +12,17 @@ import io.kotest.matchers.string.shouldNotContain
 import net.minecraft.ChatFormatting
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.TextColor
+import net.minecraft.network.chat.contents.objects.AtlasSprite
+import net.minecraft.resources.Identifier
+
+class DummyFieldSource {
+    @Suppress("UnusedPrivateMember")
+    val `chatheads$headData`: String = "field_head_data"
+}
+
+class DummyFieldTarget {
+    var `chatheads$headData`: String? = null
+}
 
 class ChatTranslationManagerSpec : FunSpec({
     beforeEach {
@@ -1172,5 +1183,121 @@ class ChatTranslationManagerSpec : FunSpec({
         refreshed shouldBe true
         tracked.isPending shouldBe false
         tracked.translatedComponent shouldBe null
+    }
+
+    test("flattenComponent and extractChatPayload preserve non-plain ComponentContents like Chat Heads sprites") {
+        val sprite = Component.`object`(
+            AtlasSprite(
+                Identifier.fromNamespaceAndPath("minecraft", "gui"),
+                Identifier.fromNamespaceAndPath("minecraft", "head"),
+            ),
+        )
+        val msg = Component.empty()
+            .append(Component.literal("<"))
+            .append(sprite)
+            .append(Component.literal("Dev1lroot"))
+            .append(Component.literal("> "))
+            .append(Component.literal("Ja ek hore deg"))
+
+        val leaves = ChatTranslationManager.flattenComponent(msg)
+        leaves.size shouldBe 5
+        leaves[1].contents shouldNotBe net.minecraft.network.chat.contents.PlainTextContents.EMPTY
+        (leaves[1].contents is net.minecraft.network.chat.contents.ObjectContents) shouldBe true
+
+        val payload = ChatTranslationManager.extractChatPayload(msg)
+        payload.messageText shouldBe "Ja ek hore deg"
+        payload.prefixComponent shouldNotBe null
+        payload.prefixComponent!!.string shouldBe "<[head@gui]Dev1lroot> "
+
+        val prefixLeaves = ChatTranslationManager.flattenComponent(payload.prefixComponent)
+        val spriteLeaf = prefixLeaves.firstOrNull { it.contents is net.minecraft.network.chat.contents.ObjectContents }
+        spriteLeaf shouldNotBe null
+    }
+
+    test("extractChatPayload matches diverse Chat Heads prefix formats") {
+        val formats = listOf(
+            "<\uFFFCDev1lroot> Ja",
+            "\uFFFC<Dev1lroot> Ja",
+            "\uFFFC <Dev1lroot> Ja",
+            "[\uFFFC] <Dev1lroot> Ja",
+            "[VIP] <\uFFFCDev1lroot> Ja",
+            "\uFFFCDev1lroot: Ja",
+            "\uFFFC Dev1lroot: Ja",
+        )
+
+        for (fmt in formats) {
+            val comp = Component.literal(fmt)
+            val payload = ChatTranslationManager.extractChatPayload(comp)
+            payload.messageText shouldBe "Ja"
+            payload.prefixComponent shouldNotBe null
+        }
+    }
+
+    test("createOriginalComponent renders flag with strikethrough and original text") {
+        val result = TranslationResult("Ja ek hore deg", "Yes I hear you", "no", "en", false)
+        val prefix = Component.literal("<Dev1lroot> ")
+        val comp = ChatTranslationManager.createOriginalComponent(555L, result, prefix)
+
+        val noFlag = com.stellar.lang.badge.LanguageFlagHelper.getFlagChar("no")
+        comp.string shouldContain "<Dev1lroot> "
+        comp.string shouldContain "$noFlag "
+        comp.string shouldContain "Ja ek hore deg"
+
+        // Verify click event is present on badge
+        val badge = comp.siblings.firstOrNull { it.string.contains(noFlag) }
+        val cmd = (badge?.style?.clickEvent as? net.minecraft.network.chat.ClickEvent.RunCommand)?.command()
+        cmd shouldBe "/stellar_lang_chat_toggle 555"
+    }
+
+    test("copyChatHeadsData copies via field reflection if method reflection unavailable") {
+        val src = DummyFieldSource()
+        val dst = DummyFieldTarget()
+        ChatTranslationManager.copyChatHeadsData(src, dst)
+        dst.`chatheads$headData` shouldBe "field_head_data"
+    }
+
+    test("updateChatDisplayWithAccessor preserves prepended head from oldMsg") {
+        val headSprite = Component.`object`(
+            AtlasSprite(
+                Identifier.fromNamespaceAndPath("minecraft", "gui"),
+                Identifier.fromNamespaceAndPath("minecraft", "head"),
+            ),
+        )
+        val oldContent = Component.empty().append(headSprite).append(Component.literal("<Dev1lroot> Ja"))
+        val orig = Component.literal("<Dev1lroot> Ja")
+        val trans = Component.literal("<Dev1lroot> Yes")
+
+        val tracked = ChatTranslationManager.TrackedChatMessage(
+            id = 888L,
+            originalComponent = orig,
+            plainText = "<Dev1lroot> Ja",
+            translatedComponent = trans,
+        )
+
+        val messageList = mutableListOf<net.minecraft.client.multiplayer.chat.GuiMessage>()
+        val dummyMsg = net.minecraft.client.multiplayer.chat.GuiMessage(
+            10,
+            oldContent,
+            null,
+            net.minecraft.client.multiplayer.chat.GuiMessageSource.PLAYER,
+            null,
+        )
+        messageList.add(dummyMsg)
+
+        var refreshed = false
+        val fakeAccessor = object : com.stellar.lang.mixin.ChatComponentAccessor {
+            override fun stellarGetAllMessages(): MutableList<net.minecraft.client.multiplayer.chat.GuiMessage> =
+                messageList
+            override fun stellarRefreshTrimmedMessages() {
+                refreshed = true
+            }
+        }
+
+        ChatTranslationManager.updateChatDisplayWithAccessor(fakeAccessor, tracked)
+        refreshed shouldBe true
+        val newContent = messageList[0].content()
+        newContent.string shouldBe "[head@gui]<Dev1lroot> Yes"
+        val leaves = ChatTranslationManager.flattenComponent(newContent)
+        (leaves[0].contents is net.minecraft.network.chat.contents.ObjectContents) shouldBe true
     }
 })

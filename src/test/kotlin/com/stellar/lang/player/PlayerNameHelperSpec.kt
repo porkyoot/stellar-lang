@@ -259,7 +259,7 @@ class PlayerNameHelperSpec : FunSpec({
         PlayerNameHelper.playerEntityPredicate = null
     }
 
-    test("ChatTranslationManager extractChatPayload respects translatePlayerNames") {
+    test("ChatTranslationManager extractChatPayload separates sender prefix") {
         val config = TranslationService.getConfig()
         val standard = Component.literal("<Dev1lroot> Bonjour")
 
@@ -270,11 +270,12 @@ class PlayerNameHelperSpec : FunSpec({
         payload1.prefixComponent?.string shouldBe "<Dev1lroot> "
         payload1.messageText shouldBe "Bonjour"
 
-        // True: prefix is NOT separated, entire message is translated together
+        // True: prefix is STILL separated to protect chat sender envelope and player heads
         config.translatePlayerNames.setValue(true, false)
         val payload2 = ChatTranslationManager.extractChatPayload(standard)
-        payload2.prefixComponent shouldBe null
-        payload2.messageText shouldBe "<Dev1lroot> Bonjour"
+        payload2.prefixComponent shouldNotBe null
+        payload2.prefixComponent?.string shouldBe "<Dev1lroot> "
+        payload2.messageText shouldBe "Bonjour"
     }
 
     test("protectPlayerNames and decodeFromUntranslatableTags protect player names") {
