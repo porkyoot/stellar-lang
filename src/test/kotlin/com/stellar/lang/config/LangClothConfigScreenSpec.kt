@@ -77,5 +77,8 @@ class LangClothConfigScreenSpec : FunSpec({
 
         config.showOriginalKey.setValue(Key.KEY_PERIOD, false)
         config.showOriginalKey.value() shouldBe Key.KEY_PERIOD
+
+        config.deeplRequestIntervalMs.setValue(350, false)
+        config.deeplRequestIntervalMs.value() shouldBe 350
     }
 })

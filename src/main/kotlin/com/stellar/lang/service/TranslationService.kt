@@ -84,6 +84,42 @@ object TranslationService {
     internal val failedRequests = ConcurrentHashMap<String, FailedRequest>()
     private val successListeners = CopyOnWriteArrayList<(TranslationResult) -> Unit>()
 
+    internal val deepLQueue = DeepLTranslationQueue(
+        pacingIntervalProvider = {
+            val config = getConfig()
+            val host = config.deeplApiHost.value()
+            val plugin = PluginRegistry.getTranslator("deepl") as? com.stellar.lang.plugin.deepl.DeepLPlugin
+            if (plugin != null && plugin.isLocalHost(host)) {
+                0L
+            } else {
+                config.deeplRequestIntervalMs.value().toLong()
+            }
+        },
+        batchExecutor = { texts, targetLang ->
+            executeBatchTranslation(texts, targetLang)
+        },
+        onSuccess = { result ->
+            val key = TranslationCache.cacheKey(result.originalText, result.targetLanguage)
+            TranslationCache.put(result)
+            failedRequests.remove(key)
+            notifySuccess(result)
+        },
+        onFailure = { text, targetLang, key ->
+            val transStatus = PluginRegistry.getActiveTranslator().getStatus()
+            val detStatus = PluginRegistry.getActiveDetector().getStatus()
+            val isDownloading = transStatus is PluginStatus.Downloading || detStatus is PluginStatus.Downloading
+            if (!isDownloading) {
+                TranslationCache.markFailed(key)
+                val existing = failedRequests[key]
+                val attempt = (existing?.attemptCount ?: 0) + 1
+                failedRequests[key] = FailedRequest(text, targetLang, System.currentTimeMillis(), attempt)
+            }
+        },
+        onComplete = { key, result ->
+            TranslationCache.completeInFlight(key, result)
+        },
+    )
+
     init {
         retryExecutor.scheduleWithFixedDelay(
             { runCatching { retryFailedTranslations() } },
@@ -173,24 +209,33 @@ object TranslationService {
         val key = TranslationCache.cacheKey(trimmed, targetLang)
         TranslationCache.evict(trimmed, targetLang)
         failedRequests.remove(key)
+        deepLQueue.remove(key)
         val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(trimmed).trim()
         if (clean != trimmed) {
             val cleanKey = TranslationCache.cacheKey(clean, targetLang)
             TranslationCache.evict(clean, targetLang)
             failedRequests.remove(cleanKey)
+            deepLQueue.remove(cleanKey)
         }
     }
 
     fun isInFlight(text: String, targetLang: String = getTargetLanguage()): Boolean {
         val key = TranslationCache.cacheKey(text.trim(), targetLang)
-        if (TranslationCache.isInFlight(key)) return true
+        if (TranslationCache.isInFlight(key) || deepLQueue.isEnqueued(key)) return true
         val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(text).trim()
         if (clean != text.trim()) {
             val cleanKey = TranslationCache.cacheKey(clean, targetLang)
-            return TranslationCache.isInFlight(cleanKey)
+            return TranslationCache.isInFlight(cleanKey) || deepLQueue.isEnqueued(cleanKey)
         }
         return false
     }
+
+    fun isDeepLActiveFor(targetLang: String = getTargetLanguage()): Boolean {
+        val candidates = getCandidateTranslators(targetLang)
+        return candidates.firstOrNull() is com.stellar.lang.plugin.deepl.DeepLPlugin
+    }
+
+    fun getDeepLQueueSize(): Int = deepLQueue.size()
 
     @JvmOverloads
     @Suppress("ReturnCount")
@@ -228,7 +273,11 @@ object TranslationService {
             return
         }
 
-        dispatchTranslationTask(trimmed, key)
+        if (isDeepLActiveFor(targetLang)) {
+            deepLQueue.enqueue(trimmed, key, targetLang)
+        } else {
+            dispatchTranslationTask(trimmed, key)
+        }
     }
 
     private fun dispatchTranslationTask(
@@ -1255,6 +1304,7 @@ object TranslationService {
     fun clearCache() {
         TranslationCache.clear()
         failedRequests.clear()
+        deepLQueue.clear()
     }
 
     fun clearAllCaches() {

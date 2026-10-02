@@ -434,4 +434,116 @@ class DeepLPluginSpec : FunSpec({
         batchRes?.firstOrNull()?.detectedLanguage shouldBe "fr"
         batchRes?.firstOrNull()?.isSameLanguage shouldBe false
     }
+
+    test("parseRetryAfterMs correctly parses integer seconds and handles null or invalid values") {
+        val plugin = DeepLPlugin()
+        plugin.parseRetryAfterMs(null) shouldBe null
+        plugin.parseRetryAfterMs("") shouldBe null
+        plugin.parseRetryAfterMs("   ") shouldBe null
+        plugin.parseRetryAfterMs("not_a_number") shouldBe null
+
+        plugin.parseRetryAfterMs("5") shouldBe 5000L
+        plugin.parseRetryAfterMs("120") shouldBe 120_000L
+        plugin.parseRetryAfterMs("0") shouldBe 0L
+    }
+
+    test("isLocalHost detects localhost and loopback addresses accurately") {
+        val plugin = DeepLPlugin()
+        plugin.isLocalHost("http://127.0.0.1:8080") shouldBe true
+        plugin.isLocalHost("127.0.0.1") shouldBe true
+        plugin.isLocalHost("http://localhost:5000") shouldBe true
+        plugin.isLocalHost("localhost") shouldBe true
+        plugin.isLocalHost("https://api.deepl.com") shouldBe false
+        plugin.isLocalHost("https://api-free.deepl.com") shouldBe false
+    }
+
+    test("DeepLPlugin recovers from HTTP 429 when retry succeeds without tripping circuit breaker") {
+        val plugin = DeepLPlugin()
+        val attempts = AtomicInteger(0)
+
+        // Reset server context to simulate 429 on first attempt, then 200 on retry
+        server.removeContext("/v2/translate")
+        server.createContext("/v2/translate") { exchange ->
+            val count = attempts.incrementAndGet()
+            if (count == 1) {
+                val body = """{"message":"Too many requests"}"""
+                val bytes = body.toByteArray()
+                exchange.responseHeaders.add("Retry-After", "0")
+                exchange.sendResponseHeaders(429, bytes.size.toLong())
+                exchange.responseBody.write(bytes)
+                exchange.close()
+            } else {
+                val body = """{"translations":[{"detected_source_language":"EN","text":"Hallo"}]}"""
+                val bytes = body.toByteArray()
+                exchange.sendResponseHeaders(200, bytes.size.toLong())
+                exchange.responseBody.write(bytes)
+                exchange.close()
+            }
+        }
+
+        try {
+            val result = plugin.translate("Hello", "en", "de")
+            result shouldBe "Hallo"
+            attempts.get() shouldBe 2
+            TranslationCache.isCircuitBreakerOpen() shouldBe false
+        } finally {
+            // Restore default server context
+            server.removeContext("/v2/translate")
+            server.createContext("/v2/translate") { exchange ->
+                lastReceivedBody = exchange.requestBody.reader().readText()
+                val isTagRejection = tagRejectionTest && lastReceivedBody.contains("tag_handling")
+                val code = if (isTagRejection) 400 else responseCode.get()
+                val body = if (isTagRejection) {
+                    """{"message":"Tag handling parsing failed"}"""
+                } else if (dynamicBatch && code == 200) {
+                    val count = runCatching {
+                        val parsedObj = com.google.gson.JsonParser.parseString(lastReceivedBody).asJsonObject
+                        parsedObj.getAsJsonArray("text").size()
+                    }.getOrDefault(1)
+                    val items = (1..count).map { """{"detected_source_language":"EN","text":"Trans $it"}""" }
+                    """{"translations":${items.joinToString(",", "[", "]")}}"""
+                } else {
+                    responseBody
+                }
+                val bytes = body.toByteArray()
+                exchange.sendResponseHeaders(code, bytes.size.toLong())
+                exchange.responseBody.write(bytes)
+                exchange.close()
+            }
+        }
+    }
+
+    test("DeepLPlugin enforces test pacing interval between requests") {
+        val plugin = DeepLPlugin()
+        plugin.testPacingIntervalMs = 50L
+
+        try {
+            val t1 = System.currentTimeMillis()
+            plugin.translate("First", "en", "de")
+            plugin.translate("Second", "en", "de")
+            val elapsed = System.currentTimeMillis() - t1
+            (elapsed >= 45L) shouldBe true
+        } finally {
+            plugin.testPacingIntervalMs = null
+        }
+    }
+
+    test("DeepLPlugin parseRetryAfterMs and state properties") {
+        val plugin = DeepLPlugin()
+        plugin.parseRetryAfterMs(null) shouldBe null
+        plugin.parseRetryAfterMs("   ") shouldBe null
+        plugin.parseRetryAfterMs("25") shouldBe 25_000L
+
+        val dateStr = java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.format(
+            java.time.ZonedDateTime.now().plusSeconds(10),
+        )
+        val ms = plugin.parseRetryAfterMs(dateStr)
+        (ms != null && ms >= 0L) shouldBe true
+        plugin.parseRetryAfterMs("not-a-valid-date") shouldBe null
+
+        plugin.lastRequestTime = 9999L
+        plugin.lastRequestTime shouldBe 9999L
+
+        plugin.getPacingInterval("http://localhost:8080") shouldBe 0L
+    }
 })

@@ -50,6 +50,13 @@ class DeepLPlugin(
 
     private val logger: Logger = LoggerFactory.getLogger("StellarLang-DeepL")
     private val gson = Gson()
+    private val requestLock = Any()
+
+    @Volatile
+    var lastRequestTime: Long = 0L
+
+    @Volatile
+    var testPacingIntervalMs: Long? = null
 
     override fun getStatus(): PluginStatus {
         val config = getConfig()
@@ -161,7 +168,7 @@ class DeepLPlugin(
             for (chunk in chunks) {
                 val hasTags = chunk.any { it.contains("<ut>", ignoreCase = true) }
                 val payload = buildChunkPayload(chunk, normSource, normTarget, formality, hasTags)
-                var response = sendDeepLRequest(endpoint, apiKey, payload)
+                var response = sendDeepLRequestWithRateLimit(endpoint, apiKey, payload, host)
 
                 // If DeepL returned HTTP 400 on XML tag handling, retry chunk with plain text
                 if (response.statusCode() == HTTP_BAD_REQUEST && hasTags) {
@@ -176,7 +183,7 @@ class DeepLPlugin(
                         formality,
                         includeTags = false,
                     )
-                    response = sendDeepLRequest(endpoint, apiKey, fallbackPayload)
+                    response = sendDeepLRequestWithRateLimit(endpoint, apiKey, fallbackPayload, host)
                 }
 
                 if (response.statusCode() in HTTP_OK_MIN..HTTP_OK_MAX) {
@@ -248,6 +255,89 @@ class DeepLPlugin(
         return cleanLang
     }
 
+    fun isLocalHost(host: String): Boolean {
+        val clean = host.lowercase().trim()
+        return clean.contains("127.0.0.1") || clean.contains("localhost")
+    }
+
+    fun parseRetryAfterMs(headerValue: String?): Long? {
+        if (headerValue.isNullOrBlank()) return null
+        val seconds = headerValue.trim().toLongOrNull()
+        if (seconds != null && seconds >= 0) {
+            return seconds * 1000L
+        }
+        return runCatching {
+            val date = java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME.parse(headerValue.trim())
+            val instant = java.time.Instant.from(date)
+            val diff = java.time.Duration.between(java.time.Instant.now(), instant).toMillis()
+            diff.coerceAtLeast(0L)
+        }.getOrNull()
+    }
+
+    internal fun getPacingInterval(host: String): Long {
+        testPacingIntervalMs?.let { return it }
+        if (isLocalHost(host)) return 0L
+        return getConfig().deeplRequestIntervalMs.value().toLong()
+    }
+
+    internal fun sendDeepLRequestWithRateLimit(
+        endpoint: URI,
+        apiKey: String,
+        payload: JsonObject,
+        host: String,
+    ): HttpResponse<String> {
+        synchronized(requestLock) {
+            val interval = getPacingInterval(host)
+            val now = System.currentTimeMillis()
+            val timeSinceLast = now - lastRequestTime
+            if (lastRequestTime > 0 && timeSinceLast < interval) {
+                sleepQuietly(interval - timeSinceLast)
+            }
+
+            var attempt = 1
+            var backoffMs = if (isLocalHost(host)) 0L else INITIAL_BACKOFF_MS
+
+            while (true) {
+                val response = sendDeepLRequest(endpoint, apiKey, payload)
+                lastRequestTime = System.currentTimeMillis()
+
+                if (response.statusCode() == HTTP_TOO_MANY_REQUESTS) {
+                    if (attempt >= MAX_RETRIES) {
+                        return response
+                    }
+                    val retryAfterHeader = response.headers().firstValue("Retry-After").orElse(null)
+                    val retryAfterMs = parseRetryAfterMs(retryAfterHeader)
+                    val waitMs = if (isLocalHost(host)) 0L else (retryAfterMs ?: backoffMs)
+
+                    logger.warn(
+                        "DeepL returned HTTP 429 Too Many Requests. Retrying in {} ms (attempt {}/{})",
+                        waitMs,
+                        attempt,
+                        MAX_RETRIES,
+                    )
+
+                    if (waitMs > 0) {
+                        sleepQuietly(waitMs)
+                    }
+
+                    backoffMs = (backoffMs * BACKOFF_MULTIPLIER).coerceAtMost(MAX_BACKOFF_MS)
+                    attempt++
+                } else {
+                    return response
+                }
+            }
+        }
+    }
+
+    private fun sleepQuietly(millis: Long) {
+        if (millis <= 0) return
+        try {
+            Thread.sleep(millis)
+        } catch (_: InterruptedException) {
+            Thread.currentThread().interrupt()
+        }
+    }
+
     private fun sendDeepLRequest(
         endpoint: URI,
         apiKey: String,
@@ -283,7 +373,7 @@ class DeepLPlugin(
                 addProperty("target_lang", "EN-US")
             }
 
-            val response = sendDeepLRequest(endpoint, apiKey, payload)
+            val response = sendDeepLRequestWithRateLimit(endpoint, apiKey, payload, host)
             if (response.statusCode() in HTTP_OK_MIN..HTTP_OK_MAX) {
                 val json = JsonParser.parseString(response.body()).asJsonObject
                 val transArray = json.getAsJsonArray("translations")
@@ -433,6 +523,11 @@ class DeepLPlugin(
     companion object {
         const val DEFAULT_FREE_API_HOST = "https://api-free.deepl.com"
         const val DEFAULT_PRO_API_HOST = "https://api.deepl.com"
+        internal const val MAX_BATCH_SIZE = 50
+        internal const val MAX_RETRIES = 3
+        internal const val INITIAL_BACKOFF_MS = 1000L
+        internal const val BACKOFF_MULTIPLIER = 2L
+        internal const val MAX_BACKOFF_MS = 16_000L
         private const val CONNECT_TIMEOUT_SECONDS = 4L
         private const val TIMEOUT_SECONDS = 5L
         private const val HTTP_OK_MIN = 200
@@ -440,7 +535,6 @@ class DeepLPlugin(
         private const val HTTP_BAD_REQUEST = 400
         private const val HTTP_TOO_MANY_REQUESTS = 429
         private const val HTTP_QUOTA_EXCEEDED = 456
-        private const val MAX_BATCH_SIZE = 50
         private const val MAX_ERROR_SNIPPET_LENGTH = 100
         private const val APPLICATION_JSON = "application/json"
         private const val HEADER_CONTENT_TYPE = "Content-Type"

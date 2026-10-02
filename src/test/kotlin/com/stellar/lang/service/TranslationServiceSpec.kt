@@ -1258,6 +1258,42 @@ class TranslationServiceSpec : FunSpec({
         }
     }
 
+    test("DeepL translateAsync routes through deepLQueue and flushes successfully") {
+        val config = TranslationService.getConfig()
+        val origTrans = config.translationPlugin.value()
+        val origHost = config.deeplApiHost.value()
+        val origKey = config.deeplApiKey.value()
+        val origTarget = config.targetLanguage.value()
+
+        try {
+            config.translationPlugin.setValue("deepl", false)
+            config.deeplApiHost.setValue("http://127.0.0.1:$serverPort", false)
+            config.deeplApiKey.setValue("test-key", false)
+            config.targetLanguage.setValue("es", false)
+
+            responseBody = """{"translations":[{"detected_source_language":"EN","text":"Hola Mundo"}]}"""
+
+            val latch = CountDownLatch(1)
+            var asyncResult: TranslationResult? = null
+
+            TranslationService.translateAsync("Hello World") { res ->
+                asyncResult = res
+                latch.countDown()
+            }
+
+            latch.await(3, TimeUnit.SECONDS) shouldBe true
+            asyncResult shouldNotBe null
+            asyncResult?.translatedText shouldBe "Hola Mundo"
+            asyncResult?.detectedLanguage shouldBe "en"
+            TranslationService.getDeepLQueueSize() shouldBe 0
+        } finally {
+            config.translationPlugin.setValue(origTrans, false)
+            config.deeplApiHost.setValue(origHost, false)
+            config.deeplApiKey.setValue(origKey, false)
+            config.targetLanguage.setValue(origTarget, false)
+        }
+    }
+
     test("normalizeLanguageCode handles null, blank, lol_us, and invalid lengths") {
         TranslationService.normalizeLanguageCode(null) shouldNotBe ""
         TranslationService.normalizeLanguageCode("") shouldNotBe ""
@@ -1339,6 +1375,46 @@ class TranslationServiceSpec : FunSpec({
         } finally {
             config.detectionPlugin.setValue(origDetection, false)
             com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackDetector(null)
+        }
+    }
+
+    test("TranslationService DeepL queue helpers and queue eviction") {
+        TranslationService.isDeepLActiveFor() shouldBe false
+        TranslationService.getDeepLQueueSize() shouldBe 0
+
+        val config = TranslationService.getConfig()
+        val origHost = config.deeplApiHost.value()
+        try {
+            config.deeplApiHost.setValue("https://api.deepl.com", false)
+            TranslationService.evict("manual_queue_test", "de")
+            TranslationService.isInFlight("manual_queue_test", "de") shouldBe false
+        } finally {
+            config.deeplApiHost.setValue(origHost, false)
+        }
+    }
+
+    test("TranslationService DeepL queue processes failure correctly") {
+        val config = TranslationService.getConfig()
+        val origTranslator = config.translationPlugin.value()
+        val origHost = config.deeplApiHost.value()
+        try {
+            config.translationPlugin.setValue("deepl", false)
+            config.deeplApiHost.setValue("https://api.deepl.com", false)
+
+            TranslationService.failedRequests.remove("fail_key_1")
+            TranslationService.deepLQueue.enqueue("Failure text", "fail_key_1", "fr")
+
+            var attempts = 0
+            while (attempts < 40 && !TranslationService.failedRequests.containsKey("fail_key_1")) {
+                Thread.sleep(50)
+                attempts++
+            }
+            TranslationService.failedRequests.containsKey("fail_key_1") shouldBe true
+        } finally {
+            config.translationPlugin.setValue(origTranslator, false)
+            config.deeplApiHost.setValue(origHost, false)
+            TranslationService.deepLQueue.clear()
+            TranslationService.failedRequests.remove("fail_key_1")
         }
     }
 })

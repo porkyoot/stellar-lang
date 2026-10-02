@@ -42,6 +42,9 @@ class StellarLangConfig : ReflectiveConfig() {
     @Comment("DeepL translation formality preference (default, more, less, prefer_more, prefer_less)")
     val deeplFormality: TrackedValue<String> = value("default")
 
+    @Comment("Minimum interval in milliseconds between DeepL API requests to avoid rate limits (default: 250ms)")
+    val deeplRequestIntervalMs: TrackedValue<Int> = value(DEFAULT_DEEPL_REQUEST_INTERVAL_MS)
+
     @Comment("Target language code (e.g. auto, en, es, fr, de, ja, zh). 'auto' infers from game setting.")
     val targetLanguage: TrackedValue<String> = value("auto")
 
@@ -101,5 +104,8 @@ class StellarLangConfig : ReflectiveConfig() {
         const val DEFAULT_SIGN_RAYCAST_INTERVAL_MS: Int = 100
         const val MIN_SIGN_RAYCAST_INTERVAL_MS: Int = 0
         const val MAX_SIGN_RAYCAST_INTERVAL_MS: Int = 1000
+        const val DEFAULT_DEEPL_REQUEST_INTERVAL_MS: Int = 250
+        const val MIN_DEEPL_REQUEST_INTERVAL_MS: Int = 0
+        const val MAX_DEEPL_REQUEST_INTERVAL_MS: Int = 5000
     }
 }

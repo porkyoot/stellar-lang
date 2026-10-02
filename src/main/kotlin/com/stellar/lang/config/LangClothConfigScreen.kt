@@ -350,6 +350,17 @@ object LangClothConfigScreen {
             .setSaveConsumer { value -> config.deeplFormality.setValue(value.trim().lowercase(), true) }
             .build()
 
+        val requestIntervalField = entries
+            .startIntField(Component.literal("Request Interval (ms)"), config.deeplRequestIntervalMs.value())
+            .setDefaultValue(StellarLangConfig.DEFAULT_DEEPL_REQUEST_INTERVAL_MS)
+            .setMin(StellarLangConfig.MIN_DEEPL_REQUEST_INTERVAL_MS)
+            .setMax(StellarLangConfig.MAX_DEEPL_REQUEST_INTERVAL_MS)
+            .setTooltip(
+                Component.literal("Delay in milliseconds between DeepL API requests to prevent rate limits (HTTP 429)"),
+            )
+            .setSaveConsumer { value -> config.deeplRequestIntervalMs.setValue(value, true) }
+            .build()
+
         val testButton = buildTestDeeplConnectionButton(
             entries = entries,
             config = config,
@@ -368,6 +379,7 @@ object LangClothConfigScreen {
         subCategory.add(apiKey)
         subCategory.add(apiHost)
         subCategory.add(formalityField)
+        subCategory.add(requestIntervalField)
         subCategory.add(testButton)
         subCategory.add(instructions)
     }
