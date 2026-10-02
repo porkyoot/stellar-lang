@@ -120,6 +120,42 @@ object TranslationService {
         },
     )
 
+    internal val googleQueue = GoogleTranslationQueue(
+        pacingIntervalProvider = {
+            val config = getConfig()
+            val host = config.googleApiHost.value()
+            val plugin = PluginRegistry.getTranslator("google") as? com.stellar.lang.plugin.google.GooglePlugin
+            if (plugin != null && plugin.isLocalHost(host)) {
+                0L
+            } else {
+                config.googleRequestIntervalMs.value().toLong()
+            }
+        },
+        batchExecutor = { texts, targetLang ->
+            executeBatchTranslation(texts, targetLang)
+        },
+        onSuccess = { result ->
+            val key = TranslationCache.cacheKey(result.originalText, result.targetLanguage)
+            TranslationCache.put(result)
+            failedRequests.remove(key)
+            notifySuccess(result)
+        },
+        onFailure = { text, targetLang, key ->
+            val transStatus = PluginRegistry.getActiveTranslator().getStatus()
+            val detStatus = PluginRegistry.getActiveDetector().getStatus()
+            val isDownloading = transStatus is PluginStatus.Downloading || detStatus is PluginStatus.Downloading
+            if (!isDownloading) {
+                TranslationCache.markFailed(key)
+                val existing = failedRequests[key]
+                val attempt = (existing?.attemptCount ?: 0) + 1
+                failedRequests[key] = FailedRequest(text, targetLang, System.currentTimeMillis(), attempt)
+            }
+        },
+        onComplete = { key, result ->
+            TranslationCache.completeInFlight(key, result)
+        },
+    )
+
     init {
         retryExecutor.scheduleWithFixedDelay(
             { runCatching { retryFailedTranslations() } },
@@ -210,22 +246,28 @@ object TranslationService {
         TranslationCache.evict(trimmed, targetLang)
         failedRequests.remove(key)
         deepLQueue.remove(key)
+        googleQueue.remove(key)
         val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(trimmed).trim()
         if (clean != trimmed) {
             val cleanKey = TranslationCache.cacheKey(clean, targetLang)
             TranslationCache.evict(clean, targetLang)
             failedRequests.remove(cleanKey)
             deepLQueue.remove(cleanKey)
+            googleQueue.remove(cleanKey)
         }
     }
 
     fun isInFlight(text: String, targetLang: String = getTargetLanguage()): Boolean {
         val key = TranslationCache.cacheKey(text.trim(), targetLang)
-        if (TranslationCache.isInFlight(key) || deepLQueue.isEnqueued(key)) return true
+        if (TranslationCache.isInFlight(key) || deepLQueue.isEnqueued(key) || googleQueue.isEnqueued(key)) {
+            return true
+        }
         val clean = com.stellar.lang.format.FormattingTagHelper.stripFormattingAndTags(text).trim()
         if (clean != text.trim()) {
             val cleanKey = TranslationCache.cacheKey(clean, targetLang)
-            return TranslationCache.isInFlight(cleanKey) || deepLQueue.isEnqueued(cleanKey)
+            return TranslationCache.isInFlight(cleanKey) ||
+                deepLQueue.isEnqueued(cleanKey) ||
+                googleQueue.isEnqueued(cleanKey)
         }
         return false
     }
@@ -235,7 +277,14 @@ object TranslationService {
         return candidates.firstOrNull() is com.stellar.lang.plugin.deepl.DeepLPlugin
     }
 
+    fun isGoogleActiveFor(targetLang: String = getTargetLanguage()): Boolean {
+        val candidates = getCandidateTranslators(targetLang)
+        return candidates.firstOrNull() is com.stellar.lang.plugin.google.GooglePlugin
+    }
+
     fun getDeepLQueueSize(): Int = deepLQueue.size()
+
+    fun getGoogleQueueSize(): Int = googleQueue.size()
 
     @JvmOverloads
     @Suppress("ReturnCount")
@@ -275,6 +324,8 @@ object TranslationService {
 
         if (isDeepLActiveFor(targetLang)) {
             deepLQueue.enqueue(trimmed, key, targetLang)
+        } else if (isGoogleActiveFor(targetLang)) {
+            googleQueue.enqueue(trimmed, key, targetLang)
         } else {
             dispatchTranslationTask(trimmed, key)
         }
@@ -413,7 +464,8 @@ object TranslationService {
 
     private fun isCircuitBrokenRemote(candidate: com.stellar.lang.plugin.TranslationPlugin): Boolean {
         val isRemote = candidate is LibreTranslatePlugin ||
-            candidate is com.stellar.lang.plugin.deepl.DeepLPlugin
+            candidate is com.stellar.lang.plugin.deepl.DeepLPlugin ||
+            candidate is com.stellar.lang.plugin.google.GooglePlugin
         return isRemote && TranslationCache.isCircuitBreakerOpen()
     }
 
@@ -435,6 +487,9 @@ object TranslationService {
             } else if (candidate is com.stellar.lang.plugin.deepl.DeepLPlugin) {
                 val key = getConfig().deeplApiKey.value().trim()
                 key.isNotBlank()
+            } else if (candidate is com.stellar.lang.plugin.google.GooglePlugin) {
+                val key = getConfig().googleApiKey.value().trim()
+                key.isNotBlank()
             } else {
                 true
             }
@@ -451,7 +506,8 @@ object TranslationService {
 
         val activeDetector = PluginRegistry.getActiveDetector()
         val isRemoteDetector = activeDetector is LibreTranslatePlugin ||
-            activeDetector is com.stellar.lang.plugin.deepl.DeepLPlugin
+            activeDetector is com.stellar.lang.plugin.deepl.DeepLPlugin ||
+            activeDetector is com.stellar.lang.plugin.google.GooglePlugin
         val detector = if (isRemoteDetector && TranslationCache.isCircuitBreakerOpen()) {
             PluginRegistry.getFallbackDetector(activeDetector) ?: activeDetector
         } else {
@@ -541,6 +597,8 @@ object TranslationService {
                         if (candidate is LibreTranslatePlugin) {
                             executeTranslationWithProvider(candidate, textToTranslate, detected, targetLang)
                         } else if (candidate is com.stellar.lang.plugin.deepl.DeepLPlugin) {
+                            executeTranslationWithProvider(candidate, textToTranslate, detected, targetLang)
+                        } else if (candidate is com.stellar.lang.plugin.google.GooglePlugin) {
                             executeTranslationWithProvider(candidate, textToTranslate, detected, targetLang)
                         } else {
                             if (detected == UNKNOWN_LANG) {
@@ -663,6 +721,33 @@ object TranslationService {
                 null
             }
         }
+        if (provider is com.stellar.lang.plugin.google.GooglePlugin) {
+            val host = config.googleApiHost.value()
+            val apiKey = config.googleApiKey.value().trim()
+            val detailed = provider.executeBatchTranslateDetailed(
+                listOf(text),
+                detectedLang.takeIf { it != UNKNOWN_LANG },
+                targetLang,
+                host,
+                apiKey,
+            )?.firstOrNull() ?: return null
+
+            val rawDetected = detailed.detectedSourceLanguage ?: detectedLang.takeIf { it != UNKNOWN_LANG }
+            val effectiveDetected = resolveDeepLEffectiveLanguage(rawDetected, text, targetLang)
+            val isSame = isSameLanguage(effectiveDetected, targetLang)
+            val effectiveTrans = if (isSame) text else detailed.translatedText
+            return if (!isUntranslatedFailure(text, effectiveTrans, effectiveDetected, targetLang)) {
+                TranslationResult(
+                    originalText = text,
+                    translatedText = effectiveTrans,
+                    detectedLanguage = effectiveDetected ?: UNKNOWN_LANG,
+                    targetLanguage = targetLang,
+                    isSameLanguage = isSame,
+                )
+            } else {
+                null
+            }
+        }
 
         return kotlinx.coroutines.runBlocking {
             val effectiveDetected = if (detectedLang == UNKNOWN_LANG) {
@@ -730,6 +815,8 @@ object TranslationService {
                         if (candidate is LibreTranslatePlugin) {
                             executeBatchTranslationWithProvider(candidate, encodedTexts, detected, targetLang)
                         } else if (candidate is com.stellar.lang.plugin.deepl.DeepLPlugin) {
+                            executeBatchTranslationWithProvider(candidate, encodedTexts, detected, targetLang)
+                        } else if (candidate is com.stellar.lang.plugin.google.GooglePlugin) {
                             executeBatchTranslationWithProvider(candidate, encodedTexts, detected, targetLang)
                         } else {
                             if (detected == UNKNOWN_LANG) {
@@ -863,6 +950,34 @@ object TranslationService {
             return texts.mapIndexed { index, original ->
                 val detailed = detailedList.getOrElse(index) {
                     com.stellar.lang.plugin.deepl.DeepLPlugin.DeepLTranslationResult(original, null)
+                }
+                val rawDetected = detailed.detectedSourceLanguage ?: detectedLang.takeIf { it != UNKNOWN_LANG }
+                val effectiveDetected = resolveDeepLEffectiveLanguage(rawDetected, original, targetLang)
+                val isSame = isSameLanguage(effectiveDetected, targetLang)
+                val effectiveTrans = if (isSame) original else detailed.translatedText
+                TranslationResult(
+                    originalText = original,
+                    translatedText = effectiveTrans,
+                    detectedLanguage = effectiveDetected ?: UNKNOWN_LANG,
+                    targetLanguage = targetLang,
+                    isSameLanguage = isSame,
+                )
+            }
+        }
+        if (provider is com.stellar.lang.plugin.google.GooglePlugin) {
+            val host = config.googleApiHost.value()
+            val apiKey = config.googleApiKey.value().trim()
+            val detailedList = provider.executeBatchTranslateDetailed(
+                texts,
+                detectedLang.takeIf { it != UNKNOWN_LANG },
+                targetLang,
+                host,
+                apiKey,
+            ) ?: return null
+
+            return texts.mapIndexed { index, original ->
+                val detailed = detailedList.getOrElse(index) {
+                    com.stellar.lang.plugin.google.GooglePlugin.GoogleTranslationResult(original, null)
                 }
                 val rawDetected = detailed.detectedSourceLanguage ?: detectedLang.takeIf { it != UNKNOWN_LANG }
                 val effectiveDetected = resolveDeepLEffectiveLanguage(rawDetected, original, targetLang)
@@ -1305,6 +1420,7 @@ object TranslationService {
         TranslationCache.clear()
         failedRequests.clear()
         deepLQueue.clear()
+        googleQueue.clear()
     }
 
     fun clearAllCaches() {
@@ -1401,6 +1517,19 @@ object TranslationService {
     ) {
         executor.execute {
             val plugin = com.stellar.lang.plugin.deepl.DeepLPlugin(httpClient)
+            val result = plugin.testConnection(apiKey, host, targetLang)
+            callback(result)
+        }
+    }
+
+    fun testGoogle(
+        apiKey: String,
+        host: String = "auto",
+        targetLang: String = getTargetLanguage(),
+        callback: (Result<String>) -> Unit,
+    ) {
+        executor.execute {
+            val plugin = com.stellar.lang.plugin.google.GooglePlugin(httpClient)
             val result = plugin.testConnection(apiKey, host, targetLang)
             callback(result)
         }

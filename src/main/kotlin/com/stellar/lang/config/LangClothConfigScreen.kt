@@ -105,7 +105,7 @@ object LangClothConfigScreen {
         category.addEntry(errorToastsToggle)
     }
 
-    @Suppress("LongMethod")
+    @Suppress("LongMethod", "CyclomaticComplexMethod")
     private fun buildProvidersCategory(
         builder: ConfigBuilder,
         entries: ConfigEntryBuilder,
@@ -116,32 +116,38 @@ object LangClothConfigScreen {
         var selectedTranslator = config.translationPlugin.value().trim().lowercase()
         var selectedDetector = config.detectionPlugin.value().trim().lowercase()
 
-        val providerOptions = listOf("onnx", "libretranslate", "deepl")
+        val providerOptions = listOf("onnx", "libretranslate", "deepl", "google")
         val nameMap = mapOf(
             "onnx" to "ONNX Runtime (Local Offline)",
             "libretranslate" to "LibreTranslate (HTTP API)",
             "deepl" to "DeepL (Official API)",
+            "google" to "Google Translate (Cloud API)",
         )
 
         val onnxSubBuilder = entries.startSubCategory(Component.literal("ONNX Runtime (Local Offline) Settings"))
         val libreSubBuilder = entries.startSubCategory(Component.literal("LibreTranslate (HTTP API) Settings"))
         val deeplSubBuilder = entries.startSubCategory(Component.literal("DeepL (Official API) Settings"))
+        val googleSubBuilder = entries.startSubCategory(Component.literal("Google Translate (Cloud API) Settings"))
 
         buildOnnxSubCategory(onnxSubBuilder, entries, config)
         buildLibreSubCategory(libreSubBuilder, entries, config)
         buildDeeplSubCategory(deeplSubBuilder, entries, config)
+        buildGoogleSubCategory(googleSubBuilder, entries, config)
 
         val onnxSubCategory = onnxSubBuilder.build()
         val libreSubCategory = libreSubBuilder.build()
         val deeplSubCategory = deeplSubBuilder.build()
+        val googleSubCategory = googleSubBuilder.build()
 
         fun updateSubCategoryVisibility() {
             val needsOnnx = selectedTranslator == "onnx" || selectedDetector == "onnx"
             val needsLibre = selectedTranslator == "libretranslate" || selectedDetector == "libretranslate"
             val needsDeepl = selectedTranslator == "deepl" || selectedDetector == "deepl"
+            val needsGoogle = selectedTranslator == "google" || selectedDetector == "google"
             onnxSubCategory.setExpanded(needsOnnx)
             libreSubCategory.setExpanded(needsLibre)
             deeplSubCategory.setExpanded(needsDeepl)
+            googleSubCategory.setExpanded(needsGoogle)
         }
 
         val transDropdown = entries
@@ -191,6 +197,7 @@ object LangClothConfigScreen {
         category.addEntry(onnxSubCategory)
         category.addEntry(libreSubCategory)
         category.addEntry(deeplSubCategory)
+        category.addEntry(googleSubCategory)
     }
 
     private fun buildOnnxSubCategory(
@@ -444,6 +451,144 @@ object LangClothConfigScreen {
                     val msg = err.message ?: err::class.simpleName ?: "Connection failed"
                     onUpdate("❌ Failed (Click to Retry)", msg)
                     showToast("Stellar Lang", "DeepL Failed: $msg")
+                },
+            )
+        }
+    }
+
+    private fun buildGoogleSubCategory(
+        subCategory: me.shedaniel.clothconfig2.impl.builders.SubCategoryBuilder,
+        entries: ConfigEntryBuilder,
+        config: StellarLangConfig,
+    ) {
+        var currentApiKey = config.googleApiKey.value()
+        var currentHost = config.googleApiHost.value()
+
+        val apiKey = entries
+            .startStrField(Component.literal("Google API Key"), config.googleApiKey.value())
+            .setDefaultValue("")
+            .setTooltip(
+                Component.literal(
+                    "API key for Google Cloud Translation API. Get one from Google Cloud Console.",
+                ),
+            )
+            .setErrorSupplier { typed ->
+                currentApiKey = typed.trim()
+                java.util.Optional.empty()
+            }
+            .setSaveConsumer { value -> config.googleApiKey.setValue(value.trim(), true) }
+            .build()
+
+        val apiHost = entries
+            .startStrField(Component.literal("Google API Host"), config.googleApiHost.value())
+            .setDefaultValue("auto")
+            .setTooltip(
+                Component.literal(
+                    "Base URL of Google Translation API ('auto' uses translation.googleapis.com, or custom proxy)",
+                ),
+            )
+            .setErrorSupplier { typed ->
+                currentHost = typed.trim()
+                java.util.Optional.empty()
+            }
+            .setSaveConsumer { value -> config.googleApiHost.setValue(value.trim(), true) }
+            .build()
+
+        val requestIntervalField = entries
+            .startIntField(Component.literal("Request Interval (ms)"), config.googleRequestIntervalMs.value())
+            .setDefaultValue(StellarLangConfig.DEFAULT_GOOGLE_REQUEST_INTERVAL_MS)
+            .setMin(StellarLangConfig.MIN_GOOGLE_REQUEST_INTERVAL_MS)
+            .setMax(StellarLangConfig.MAX_GOOGLE_REQUEST_INTERVAL_MS)
+            .setTooltip(
+                Component.literal(
+                    "Delay in milliseconds between Google API requests to prevent rate limits and quota spikes",
+                ),
+            )
+            .setSaveConsumer { value -> config.googleRequestIntervalMs.setValue(value, true) }
+            .build()
+
+        val testButton = buildTestGoogleConnectionButton(
+            entries = entries,
+            config = config,
+            getKey = { currentApiKey },
+            getHost = { currentHost },
+        )
+
+        val instructions = entries
+            .startTextDescription(
+                Component.literal(
+                    "Need an API key? Enable Cloud Translation API in Google Cloud Console & create an API key.",
+                ),
+            )
+            .build()
+
+        subCategory.add(apiKey)
+        subCategory.add(apiHost)
+        subCategory.add(requestIntervalField)
+        subCategory.add(testButton)
+        subCategory.add(instructions)
+    }
+
+    private fun buildTestGoogleConnectionButton(
+        entries: ConfigEntryBuilder,
+        config: StellarLangConfig,
+        getKey: () -> String,
+        getHost: () -> String,
+    ): me.shedaniel.clothconfig2.api.AbstractConfigListEntry<*> {
+        var lastToggleValue = false
+        var testStatus = "Click to Test Google"
+        var testError: String? = null
+
+        return entries
+            .startBooleanToggle(Component.literal("Test Google Connection"), false)
+            .setYesNoTextSupplier { boolValue ->
+                if (boolValue != lastToggleValue) {
+                    lastToggleValue = boolValue
+                    val now = System.currentTimeMillis()
+                    if (now - lastTestTimeMs >= TEST_DEBOUNCE_MS && isTesting.compareAndSet(false, true)) {
+                        lastTestTimeMs = now
+                        testStatus = "⌛ Testing Google..."
+                        testError = null
+                        triggerGoogleConnectionTest(config, getKey(), getHost()) { status, error ->
+                            testStatus = status
+                            testError = error
+                            isTesting.set(false)
+                        }
+                    }
+                }
+                Component.literal(testStatus)
+            }
+            .setErrorSupplier { _ ->
+                testError?.let {
+                    java.util.Optional.of(Component.literal("Error: $it"))
+                } ?: java.util.Optional.empty()
+            }
+            .setTooltip(
+                Component.literal("Click to test connectivity and translation with the current Google API key"),
+            )
+            .build()
+    }
+
+    private fun triggerGoogleConnectionTest(
+        config: StellarLangConfig,
+        apiKey: String,
+        host: String,
+        onUpdate: (String, String?) -> Unit,
+    ) {
+        TranslationService.testGoogle(
+            apiKey = apiKey.ifBlank { config.googleApiKey.value() },
+            host = host.ifBlank { config.googleApiHost.value() },
+            targetLang = TranslationService.getTargetLanguage(),
+        ) { result ->
+            result.fold(
+                onSuccess = { translated ->
+                    onUpdate("✅ OK ('Hello' -> '$translated')", null)
+                    showToast("Stellar Lang", "Google OK! 'Hello' -> '$translated'")
+                },
+                onFailure = { err ->
+                    val msg = err.message ?: err::class.simpleName ?: "Connection failed"
+                    onUpdate("❌ Failed (Click to Retry)", msg)
+                    showToast("Stellar Lang", "Google Failed: $msg")
                 },
             )
         }

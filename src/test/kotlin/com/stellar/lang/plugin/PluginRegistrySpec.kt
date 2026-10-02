@@ -27,21 +27,25 @@ class PluginRegistrySpec : FunSpec({
     }
 
     test("PluginRegistry registers defaults and resolves plugins") {
-        PluginRegistry.getAllDetectors().size shouldBe 3
-        PluginRegistry.getAllTranslators().size shouldBe 3
+        PluginRegistry.getAllDetectors().size shouldBe 4
+        PluginRegistry.getAllTranslators().size shouldBe 4
 
         PluginRegistry.getDetector("onnx") shouldNotBe null
         PluginRegistry.getDetector("libretranslate") shouldNotBe null
         PluginRegistry.getDetector("deepl") shouldNotBe null
+        PluginRegistry.getDetector("google") shouldNotBe null
         PluginRegistry.getTranslator("onnx") shouldNotBe null
         PluginRegistry.getTranslator("libretranslate") shouldNotBe null
         PluginRegistry.getTranslator("deepl") shouldNotBe null
+        PluginRegistry.getTranslator("google") shouldNotBe null
 
         PluginRegistry.getDetector("unknown_id") shouldBe null
         PluginRegistry.getTranslator("unknown_id") shouldBe null
 
         PluginRegistry.normalizePluginId("DeepL API") shouldBe "deepl"
         PluginRegistry.normalizePluginId("DEEP") shouldBe "deepl"
+        PluginRegistry.normalizePluginId("Google API") shouldBe "google"
+        PluginRegistry.normalizePluginId("GOOG") shouldBe "google"
     }
 
     test("PluginRegistry resolves active plugins based on configuration") {
@@ -56,6 +60,11 @@ class PluginRegistrySpec : FunSpec({
         config.detectionPlugin.setValue("deepl", false)
         PluginRegistry.getActiveTranslator().id shouldBe "deepl"
         PluginRegistry.getActiveDetector().id shouldBe "deepl"
+
+        config.translationPlugin.setValue("google", false)
+        config.detectionPlugin.setValue("google", false)
+        PluginRegistry.getActiveTranslator().id shouldBe "google"
+        PluginRegistry.getActiveDetector().id shouldBe "google"
 
         config.translationPlugin.setValue("onnx", false)
         config.detectionPlugin.setValue("onnx", false)
@@ -85,7 +94,7 @@ class PluginRegistrySpec : FunSpec({
 
         // Restore defaults
         PluginRegistry.registerDefaults()
-        PluginRegistry.getAllDetectors().size shouldBe 3
+        PluginRegistry.getAllDetectors().size shouldBe 4
     }
 
     test("custom plugin registration and default batch translation") {

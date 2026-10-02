@@ -17,6 +17,9 @@ class StellarLangConfigSpec : FunSpec({
         config.deeplApiKey.value() shouldBe ""
         config.deeplApiHost.value() shouldBe "auto"
         config.deeplFormality.value() shouldBe "default"
+        config.googleApiKey.value() shouldBe ""
+        config.googleApiHost.value() shouldBe "auto"
+        config.googleRequestIntervalMs.value() shouldBe StellarLangConfig.DEFAULT_GOOGLE_REQUEST_INTERVAL_MS
         config.targetLanguage.value() shouldBe "auto"
         config.translationPlugin.value() shouldBe "onnx"
         config.detectionPlugin.value() shouldBe "onnx"
@@ -44,6 +47,15 @@ class StellarLangConfigSpec : FunSpec({
 
         config.deeplFormality.setValue("more", true)
         config.deeplFormality.value() shouldBe "more"
+
+        config.googleApiKey.setValue("goog_key_123", true)
+        config.googleApiKey.value() shouldBe "goog_key_123"
+
+        config.googleApiHost.setValue("http://proxy.internal", true)
+        config.googleApiHost.value() shouldBe "http://proxy.internal"
+
+        config.googleRequestIntervalMs.setValue(150, true)
+        config.googleRequestIntervalMs.value() shouldBe 150
 
         config.hideIndicators.setValue(true, true)
         config.hideIndicators.value() shouldBe true

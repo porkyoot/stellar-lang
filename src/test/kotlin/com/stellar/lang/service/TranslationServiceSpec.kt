@@ -19,6 +19,7 @@ class TranslationServiceSpec : FunSpec({
     val responseCode = AtomicInteger(200)
     val requestCount = AtomicInteger(0)
     var responseBody: String = """{"translatedText": "Hola", "detectedLanguage": "en"}"""
+    var detectResponseBody: String = """{"data":{"detections":[[{"language":"es","confidence":0.99}]]}}"""
 
     beforeSpec {
         server = HttpServer.create(InetSocketAddress("127.0.0.1", 0), 0)
@@ -33,6 +34,18 @@ class TranslationServiceSpec : FunSpec({
         server.createContext("/v2/translate") { exchange ->
             requestCount.incrementAndGet()
             val bytes = responseBody.toByteArray()
+            exchange.sendResponseHeaders(responseCode.get(), bytes.size.toLong())
+            exchange.responseBody.write(bytes)
+            exchange.close()
+        }
+        server.createContext("/language/translate/v2") { exchange ->
+            requestCount.incrementAndGet()
+            val body = if (exchange.requestURI.path.endsWith("/detect")) {
+                detectResponseBody
+            } else {
+                responseBody
+            }
+            val bytes = body.toByteArray()
             exchange.sendResponseHeaders(responseCode.get(), bytes.size.toLong())
             exchange.responseBody.write(bytes)
             exchange.close()
@@ -546,6 +559,52 @@ class TranslationServiceSpec : FunSpec({
         }
         latchFail.await(5, TimeUnit.SECONDS) shouldBe true
         failOutcome?.isFailure shouldBe true
+    }
+
+    test("testGoogle reports success and failure properly") {
+        responseCode.set(200)
+        responseBody = """{"data":{"translations":[{"translatedText":"Hola","detectedSourceLanguage":"en"}]}}"""
+        val latch = CountDownLatch(1)
+        var outcome: Result<String>? = null
+        TranslationService.testGoogle("test_key", "http://127.0.0.1:$serverPort", "es") { res ->
+            outcome = res
+            latch.countDown()
+        }
+        latch.await(5, TimeUnit.SECONDS) shouldBe true
+        outcome?.isSuccess shouldBe true
+        outcome?.getOrNull() shouldBe "Hola"
+
+        val latchFail = CountDownLatch(1)
+        var failOutcome: Result<String>? = null
+        TranslationService.testGoogle("", "http://127.0.0.1:$serverPort", "es") { res ->
+            failOutcome = res
+            latchFail.countDown()
+        }
+        latchFail.await(5, TimeUnit.SECONDS) shouldBe true
+        failOutcome?.isFailure shouldBe true
+    }
+
+    test("getCandidateTranslators filters Google candidate based on key and status") {
+        val config = TranslationService.getConfig()
+        val origTrans = config.translationPlugin.value()
+        val origKey = config.googleApiKey.value()
+        try {
+            val googleCandidate = com.stellar.lang.plugin.PluginRegistry.getTranslator("google")!!
+            config.translationPlugin.setValue("onnx", false)
+            config.googleApiKey.setValue("", false)
+            com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackTranslator(googleCandidate)
+
+            val noKeyCandidates = TranslationService.getCandidateTranslators("es")
+            noKeyCandidates.contains(googleCandidate) shouldBe false
+
+            config.googleApiKey.setValue("valid_google_key", false)
+            val withKeyCandidates = TranslationService.getCandidateTranslators("es")
+            withKeyCandidates.contains(googleCandidate) shouldBe true
+        } finally {
+            config.translationPlugin.setValue(origTrans, false)
+            config.googleApiKey.setValue(origKey, false)
+            com.stellar.lang.plugin.PluginRegistry.setExplicitFallbackTranslator(null)
+        }
     }
 
     test("getCandidateTranslators filters DeepL candidate based on key and status") {
@@ -1415,6 +1474,201 @@ class TranslationServiceSpec : FunSpec({
             config.deeplApiHost.setValue(origHost, false)
             TranslationService.deepLQueue.clear()
             TranslationService.failedRequests.remove("fail_key_1")
+        }
+    }
+
+    test("Google single and batch translation through TranslationService") {
+        val config = TranslationService.getConfig()
+        val origTrans = config.translationPlugin.value()
+        val origHost = config.googleApiHost.value()
+        val origKey = config.googleApiKey.value()
+        val origTarget = config.targetLanguage.value()
+        try {
+            responseCode.set(200)
+            responseBody = """{"data":{"translations":[{"translatedText":"Hola","detectedSourceLanguage":"en"}]}}"""
+            config.translationPlugin.setValue("google", false)
+            config.googleApiHost.setValue("http://127.0.0.1:$serverPort", false)
+            config.googleApiKey.setValue("test-key", false)
+            config.targetLanguage.setValue("es", false)
+
+            val single = TranslationService.executeTranslation("Hello", "es")
+            single shouldNotBe null
+            single?.translatedText shouldBe "Hola"
+            single?.detectedLanguage shouldBe "en"
+            single?.isSameLanguage shouldBe false
+
+            val batch = TranslationService.executeBatchTranslation(listOf("Hello"), "es")
+            batch shouldNotBe null
+            batch?.size shouldBe 1
+            batch?.firstOrNull()?.translatedText shouldBe "Hola"
+        } finally {
+            config.translationPlugin.setValue(origTrans, false)
+            config.googleApiHost.setValue(origHost, false)
+            config.googleApiKey.setValue(origKey, false)
+            config.targetLanguage.setValue(origTarget, false)
+        }
+    }
+
+    test("Google translateAsync routes through googleQueue and flushes successfully") {
+        val config = TranslationService.getConfig()
+        val origTrans = config.translationPlugin.value()
+        val origHost = config.googleApiHost.value()
+        val origKey = config.googleApiKey.value()
+        try {
+            responseCode.set(200)
+            responseBody = """{"data":{"translations":[{"translatedText":"Hola","detectedSourceLanguage":"en"}]}}"""
+            config.translationPlugin.setValue("google", false)
+            config.googleApiHost.setValue("http://127.0.0.1:$serverPort", false)
+            config.googleApiKey.setValue("test-key", false)
+
+            val latch = CountDownLatch(1)
+            var asyncResult: TranslationResult? = null
+            TranslationService.translateAsync("Hello Async Google", forceRetry = true) { res ->
+                asyncResult = res
+                latch.countDown()
+            }
+
+            latch.await(5, TimeUnit.SECONDS) shouldBe true
+            asyncResult shouldNotBe null
+            asyncResult?.translatedText shouldBe "Hola"
+            TranslationService.getGoogleQueueSize() shouldBe 0
+        } finally {
+            config.translationPlugin.setValue(origTrans, false)
+            config.googleApiHost.setValue(origHost, false)
+            config.googleApiKey.setValue(origKey, false)
+        }
+    }
+
+    test("TranslationService Google queue helpers and queue eviction") {
+        TranslationService.isGoogleActiveFor() shouldBe false
+        TranslationService.getGoogleQueueSize() shouldBe 0
+
+        val config = TranslationService.getConfig()
+        val origHost = config.googleApiHost.value()
+        try {
+            config.googleApiHost.setValue("http://127.0.0.1:$serverPort", false)
+            TranslationService.evict("manual_queue_test_google", "es")
+            TranslationService.isInFlight("manual_queue_test_google", "es") shouldBe false
+        } finally {
+            config.googleApiHost.setValue(origHost, false)
+        }
+    }
+
+    test("TranslationService testGoogle connectivity check") {
+        val latch = CountDownLatch(1)
+        var googleResult: Result<String>? = null
+        responseCode.set(200)
+        responseBody = """{"data":{"translations":[{"translatedText":"Hola","detectedSourceLanguage":"en"}]}}"""
+        TranslationService.testGoogle("test-key", "http://127.0.0.1:$serverPort", "es") { res ->
+            googleResult = res
+            latch.countDown()
+        }
+        latch.await(3, TimeUnit.SECONDS) shouldBe true
+        googleResult shouldNotBe null
+        googleResult?.isSuccess shouldBe true
+        googleResult?.getOrNull() shouldBe "Hola"
+
+        val latchDef = CountDownLatch(1)
+        var googleResultDef: Result<String>? = null
+        TranslationService.testGoogle("test-key") { res ->
+            googleResultDef = res
+            latchDef.countDown()
+        }
+        latchDef.await(3, TimeUnit.SECONDS) shouldBe true
+        googleResultDef shouldNotBe null
+    }
+
+    test("TranslationService isGoogleActiveFor returns correct status") {
+        val config = TranslationService.getConfig()
+        val origTrans = config.translationPlugin.value()
+        try {
+            config.translationPlugin.setValue("google", false)
+            TranslationService.isGoogleActiveFor("es") shouldBe true
+
+            config.translationPlugin.setValue("deepl", false)
+            TranslationService.isGoogleActiveFor("es") shouldBe false
+        } finally {
+            config.translationPlugin.setValue(origTrans, false)
+        }
+    }
+
+    test("TranslationService Google queue processes failure correctly") {
+        val config = TranslationService.getConfig()
+        val origTranslator = config.translationPlugin.value()
+        val origHost = config.googleApiHost.value()
+        try {
+            config.translationPlugin.setValue("google", false)
+            config.googleApiHost.setValue("http://127.0.0.1:$serverPort", false)
+            responseCode.set(500)
+            responseBody = """{"error":{"code":500,"message":"Failure"}}"""
+
+            TranslationService.failedRequests.remove("fail_key_google_1")
+            TranslationService.googleQueue.enqueue("Failure text", "fail_key_google_1", "fr")
+
+            var attempts = 0
+            while (attempts < 40 && !TranslationService.failedRequests.containsKey("fail_key_google_1")) {
+                Thread.sleep(50)
+                attempts++
+            }
+            TranslationService.failedRequests.containsKey("fail_key_google_1") shouldBe true
+        } finally {
+            config.translationPlugin.setValue(origTranslator, false)
+            config.googleApiHost.setValue(origHost, false)
+            TranslationService.googleQueue.clear()
+            TranslationService.failedRequests.remove("fail_key_google_1")
+        }
+    }
+
+    test("TranslationService detectLanguage routes through Google when configured") {
+        val config = TranslationService.getConfig()
+        val origDetector = config.detectionPlugin.value()
+        val origHost = config.googleApiHost.value()
+        val origKey = config.googleApiKey.value()
+        try {
+            config.detectionPlugin.setValue("google", false)
+            config.googleApiHost.setValue("http://127.0.0.1:$serverPort", false)
+            config.googleApiKey.setValue("test-key", false)
+            responseCode.set(200)
+            detectResponseBody = """{"data":{"detections":[[{"language":"es","confidence":0.99}]]}}"""
+
+            val detected = TranslationService.detectLanguage("Buenos dias amigos como estan")
+            detected shouldBe "es"
+        } finally {
+            config.detectionPlugin.setValue(origDetector, false)
+            config.googleApiHost.setValue(origHost, false)
+            config.googleApiKey.setValue(origKey, false)
+        }
+    }
+
+    test("TranslationService isGoogleActiveFor default arguments") {
+        TranslationService.isGoogleActiveFor() shouldBe false
+    }
+
+    test("TranslationService Google execution when source equals target language") {
+        val config = TranslationService.getConfig()
+        val origTrans = config.translationPlugin.value()
+        val origHost = config.googleApiHost.value()
+        val origKey = config.googleApiKey.value()
+        try {
+            responseCode.set(200)
+            responseBody = """{"data":{"translations":[{"translatedText":"Hola","detectedSourceLanguage":"es"}]}}"""
+            config.translationPlugin.setValue("google", false)
+            config.googleApiHost.setValue("http://127.0.0.1:$serverPort", false)
+            config.googleApiKey.setValue("test-key", false)
+
+            val single = TranslationService.executeTranslation("Hola", "es")
+            single shouldNotBe null
+            single?.isSameLanguage shouldBe true
+            single?.translatedText shouldBe "Hola"
+
+            val batch = TranslationService.executeBatchTranslation(listOf("Hola", "Amigo"), "es")
+            batch shouldNotBe null
+            batch?.size shouldBe 2
+            batch?.get(0)?.isSameLanguage shouldBe true
+        } finally {
+            config.translationPlugin.setValue(origTrans, false)
+            config.googleApiHost.setValue(origHost, false)
+            config.googleApiKey.setValue(origKey, false)
         }
     }
 })

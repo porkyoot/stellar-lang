@@ -13,6 +13,7 @@ object PluginRegistry {
     private const val ONNX_PLUGIN_ID = "onnx"
     private const val LIBRE_PLUGIN_ID = "libretranslate"
     private const val DEEPL_PLUGIN_ID = "deepl"
+    private const val GOOGLE_PLUGIN_ID = "google"
 
     private val detectorPlugins = ConcurrentHashMap<String, LanguageDetectorPlugin>()
     private val translationPlugins = ConcurrentHashMap<String, TranslationPlugin>()
@@ -40,6 +41,10 @@ object PluginRegistry {
         val deepl = com.stellar.lang.plugin.deepl.DeepLPlugin()
         registerDetector(deepl)
         registerTranslator(deepl)
+
+        val google = com.stellar.lang.plugin.google.GooglePlugin()
+        registerDetector(google)
+        registerTranslator(google)
     }
 
     fun registerDetector(plugin: LanguageDetectorPlugin) {
@@ -56,6 +61,7 @@ object PluginRegistry {
             lower.contains(ONNX_PLUGIN_ID) || lower.contains("local") -> ONNX_PLUGIN_ID
             lower.contains("libre") -> LIBRE_PLUGIN_ID
             lower.contains("deep") -> DEEPL_PLUGIN_ID
+            lower.contains("goog") -> GOOGLE_PLUGIN_ID
             else -> lower
         }
     }
@@ -110,6 +116,7 @@ object PluginRegistry {
             ONNX_PLUGIN_ID -> LIBRE_PLUGIN_ID
             LIBRE_PLUGIN_ID -> ONNX_PLUGIN_ID
             DEEPL_PLUGIN_ID -> ONNX_PLUGIN_ID
+            GOOGLE_PLUGIN_ID -> ONNX_PLUGIN_ID
             else -> null
         } ?: return null
         val candidate = getTranslator(fallbackId) ?: return null
@@ -126,6 +133,7 @@ object PluginRegistry {
             ONNX_PLUGIN_ID -> LIBRE_PLUGIN_ID
             LIBRE_PLUGIN_ID -> ONNX_PLUGIN_ID
             DEEPL_PLUGIN_ID -> ONNX_PLUGIN_ID
+            GOOGLE_PLUGIN_ID -> ONNX_PLUGIN_ID
             else -> null
         } ?: return null
         val candidate = getDetector(fallbackId) ?: return null
