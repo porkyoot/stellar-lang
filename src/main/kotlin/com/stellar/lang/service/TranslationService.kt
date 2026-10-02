@@ -1434,6 +1434,7 @@ object TranslationService {
         com.stellar.lang.book.BookTranslationManager.clearCache()
         com.stellar.lang.map.MapBannerTranslationManager.clearCache()
         com.stellar.lang.motd.ServerMotdTranslationManager.clearCache()
+        com.stellar.lang.geoip.ServerFlagManager.clearCache()
     }
 
     fun testConnection(

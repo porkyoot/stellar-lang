@@ -97,10 +97,59 @@ object LangClothConfigScreen {
             .setSaveConsumer { value -> config.showErrorToasts.setValue(value, true) }
             .build()
 
+        val serverFlagsToggle = entries
+            .startBooleanToggle(
+                Component.literal("Server Country Flags"),
+                config.serverCountryFlags.value(),
+            )
+            .setDefaultValue(true)
+            .setTooltip(
+                Component.literal(
+                    "Displays country flags next to servers in the multiplayer server list based on GeoIP",
+                ),
+            )
+            .setSaveConsumer { value -> config.serverCountryFlags.setValue(value, true) }
+            .build()
+
+        val placementOptions = listOf("before_name", "after_name")
+        val placementField = entries
+            .startStringDropdownMenu(
+                Component.literal("Server Flag Placement"),
+                config.serverFlagPlacement.value(),
+                { id ->
+                    when (id) {
+                        "after_name" -> Component.literal("After Server Name")
+                        else -> Component.literal("Before Server Name")
+                    }
+                },
+            )
+            .setSelections(placementOptions)
+            .setDefaultValue("before_name")
+            .setTooltip(
+                Component.literal("Position of the country flag relative to the server name"),
+            )
+            .setSaveConsumer { value -> config.serverFlagPlacement.setValue(value.trim().lowercase(), true) }
+            .build()
+
+        val serverFlagTooltipToggle = entries
+            .startBooleanToggle(
+                Component.literal("Server Flag Tooltips"),
+                config.serverFlagTooltip.value(),
+            )
+            .setDefaultValue(true)
+            .setTooltip(
+                Component.literal("Displays country name and emoji when hovering over the server flag"),
+            )
+            .setSaveConsumer { value -> config.serverFlagTooltip.setValue(value, true) }
+            .build()
+
         category.addEntry(masterToggle)
         category.addEntry(targetLang)
         category.addEntry(hideIndicators)
         category.addEntry(errorToastsToggle)
+        category.addEntry(serverFlagsToggle)
+        category.addEntry(placementField)
+        category.addEntry(serverFlagTooltipToggle)
     }
 
     @Suppress("LongMethod", "CyclomaticComplexMethod")

@@ -105,6 +105,15 @@ class StellarLangConfig : ReflectiveConfig() {
     @Comment("Show in-game toast notifications for the first occurrence of API errors")
     val showErrorToasts: TrackedValue<Boolean> = value(true)
 
+    @Comment("Enable country flags next to servers in multiplayer server list based on GeoIP")
+    val serverCountryFlags: TrackedValue<Boolean> = value(true)
+
+    @Comment("Placement of server country flag (before_name or after_name)")
+    val serverFlagPlacement: TrackedValue<String> = value("before_name")
+
+    @Comment("Show country name and emoji tooltip when hovering over server flag")
+    val serverFlagTooltip: TrackedValue<Boolean> = value(true)
+
     companion object {
         const val DEFAULT_MAX_CACHE_ENTRIES: Int = 5000
         const val DEFAULT_ONNX_THREADS: Int = 2

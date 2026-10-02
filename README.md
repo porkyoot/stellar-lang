@@ -46,6 +46,13 @@ Supporting **ONNX Runtime (Local Offline)**, **DeepL (Official API)**, and **Lib
 ### 🏷️ Entity & Item Name Translation
 * Custom nametags on entities, server MOTDs, map banners, and item hover tooltips are translated automatically with a subtle pixel flag indicator. Untranslated or failed entries show clean original text with no badge.
 
+### 🚩 Server Country Flags
+* **Multiplayer Server Flags:** Inspired by the classic Server Country Flags mod, automatically detects server hosting locations using GeoIP APIs and displays crisp pixel-art country flags next to server names in the multiplayer list.
+* **Hover Tooltips:** Hovering over any server flag displays the full country name and flag emoji.
+* **Native Localhost & Private Network Handling:** Automatically detects LAN and loopback servers (`localhost`, `127.0.0.1`, RFC 1918 private ranges) with a dedicated LAN / globe icon without making external network calls.
+* **Persistent Disk & In-Memory Caching:** Resolved GeoIP data is saved in `config/stellar_lang/server_flags_cache.json` for zero latency and zero repeated network requests on subsequent visits.
+* **Configurable:** Toggle on/off, choose placement (before or after server name), or toggle hover tooltips directly in the **General** tab of the settings menu.
+
 ### 📦 Container & Inventory Label Translation
 * Automatically translates container titles (chests, barrels, furnaces, shulkers, hoppers, dispensers, etc.) and inventory labels **if and only if** they have been player-renamed and are not in the target language.
 * Default vanilla labels remain completely untranslated by the mod (rendered through vanilla localization), preserving full client compatibility.
