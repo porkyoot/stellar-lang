@@ -104,7 +104,7 @@ object ServerMotdTranslationManager {
     private fun buildMotdComponent(
         translatedText: String,
         original: Component,
-        lang: String? = null,
+        lang: String?,
     ): Component {
         val isHidden = TranslationBadgeHelper.isHidden()
         val textComp = com.stellar.lang.format.FormattingTagHelper.formattedTextToComponent(

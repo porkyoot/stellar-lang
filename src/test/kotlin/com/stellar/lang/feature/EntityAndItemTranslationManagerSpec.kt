@@ -636,6 +636,8 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
         com.stellar.lang.service.TranslationCache.completeInFlight(key, successResult)
 
         // 4. Retry branch with same language
+        TranslationService.evict(text, targetLang)
+        ItemTranslationManager.clearCache()
         ItemTranslationManager.failedItems.add(cacheKey)
         ItemTranslationManager.lastItemRetryTimes[cacheKey] = 0L
         TranslationService.markFailed(text)
@@ -675,6 +677,8 @@ class EntityAndItemTranslationManagerSpec : FunSpec({
         com.stellar.lang.service.TranslationCache.completeInFlight(key, successResult)
 
         // 4. Retry branch with same language
+        TranslationService.evict(text, targetLang)
+        EntityTranslationManager.clearCache()
         EntityTranslationManager.failedEntities.add(textKey)
         EntityTranslationManager.lastEntityRetryTimes[textKey] = 0L
         TranslationService.markFailed(text)

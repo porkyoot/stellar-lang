@@ -135,6 +135,12 @@ class LanguageFlagHelperSpec : FunSpec({
 
         // Non 2-letter unknown fallback
         LanguageFlagHelper.getFlagEmoji("nonexistent_long_code") shouldBe "\uD83C\uDF10"
+        // 2-digit non-alpha fallback
+        LanguageFlagHelper.getFlagEmoji("12") shouldBe "\uD83C\uDF10"
+    }
+
+    test("getLanguageName falls back to uppercase tag when display name matches tag") {
+        LanguageFlagHelper.getLanguageName("und") shouldBe "UND"
     }
 
     test("isFlagChar boundary checks") {
