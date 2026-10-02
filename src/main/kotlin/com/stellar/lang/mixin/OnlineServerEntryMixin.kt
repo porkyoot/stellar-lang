@@ -8,8 +8,6 @@
 
 package com.stellar.lang.mixin
 
-import com.llamalad7.mixinextras.injector.wrapoperation.Operation
-import com.llamalad7.mixinextras.injector.wrapoperation.WrapOperation
 import com.stellar.lang.geoip.ServerFlagManager
 import com.stellar.lang.motd.ServerMotdTranslationManager
 import com.stellar.lang.service.TranslationService
@@ -28,12 +26,9 @@ import org.spongepowered.asm.mixin.injection.Inject
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo
 import java.lang.reflect.Method
 
-private const val FLAG_SPACING: Int = 4
 private const val PING_ICON_WIDTH: Int = 10
 private const val PING_ICON_OFFSET_X: Int = 15
 private const val FLAG_OFFSET_Y: Int = 12
-private const val PLACEMENT_UNDER_PING: String = "under_ping"
-private const val PLACEMENT_AFTER_NAME: String = "after_name"
 
 private val getContentRightMethod: Method? = runCatching {
     ServerSelectionList.OnlineServerEntry::class.java.getMethod("getContentRight").apply {
@@ -48,7 +43,7 @@ private val getContentYMethod: Method? = runCatching {
 }.getOrNull()
 
 /**
- * Mixin to display GeoIP country flag badges and translate MOTD in the server selection list.
+ * Mixin to display GeoIP country flag badges under the ping indicator and translate MOTD.
  */
 @Mixin(ServerSelectionList.OnlineServerEntry::class)
 class OnlineServerEntryMixin {
@@ -104,25 +99,37 @@ class OnlineServerEntryMixin {
         ci: CallbackInfo,
     ) {
         runCatching {
-            val placement = runCatching {
-                TranslationService.getConfig().serverFlagPlacement.value()
-            }.getOrDefault(PLACEMENT_UNDER_PING)
-
-            if (placement == PLACEMENT_UNDER_PING) {
-                renderFlagUnderPing(extractor)
-            }
+            renderFlagUnderPing(extractor)
         }
+    }
+
+    @Unique
+    private fun resolveRight(): Int? {
+        val reflected = getContentRightMethod?.invoke(this) as? Int
+        if (reflected != null) return reflected
+        val dynamicallyFound = this.javaClass.methods
+            .firstOrNull { it.name == "getContentRight" && it.parameterCount == 0 }
+            ?.invoke(this) as? Int
+        if (dynamicallyFound != null) return dynamicallyFound
+        return (this as Any as? LayoutElement)?.let { it.x + it.width - 2 }
+    }
+
+    @Unique
+    private fun resolveTop(): Int? {
+        val reflected = getContentYMethod?.invoke(this) as? Int
+        if (reflected != null) return reflected
+        val dynamicallyFound = this.javaClass.methods
+            .firstOrNull { it.name == "getContentY" && it.parameterCount == 0 }
+            ?.invoke(this) as? Int
+        if (dynamicallyFound != null) return dynamicallyFound
+        return (this as Any as? LayoutElement)?.let { it.y + 2 }
     }
 
     @Unique
     private fun getEntryBounds(): Pair<Int, Int>? {
         return runCatching {
-            val right = getContentRightMethod?.invoke(this) as? Int
-                ?: (this as Any as? LayoutElement)?.let { it.x + it.width - 2 }
-                ?: return null
-            val top = getContentYMethod?.invoke(this) as? Int
-                ?: (this as Any as? LayoutElement)?.let { it.y + 2 }
-                ?: return null
+            val right = resolveRight() ?: return null
+            val top = resolveTop() ?: return null
             Pair(right, top)
         }.getOrNull()
     }
@@ -148,74 +155,6 @@ class OnlineServerEntryMixin {
     @Unique
     private fun isServerReady(): Boolean {
         return ::serverData.isInitialized && ServerFlagManager.isEnabled()
-    }
-
-    @WrapOperation(
-        method = [
-            "extractContent(Lnet/minecraft/client/gui/GuiGraphicsExtractor;IIZF)V",
-        ],
-        at = [
-            At(
-                value = "INVOKE",
-                target = "Lnet/minecraft/client/gui/GuiGraphicsExtractor;text(" +
-                    "Lnet/minecraft/client/gui/Font;Ljava/lang/String;III)V",
-            ),
-        ],
-        require = 0,
-    )
-    private fun stellarWrapServerName(
-        extractor: GuiGraphicsExtractor,
-        font: Font,
-        text: String,
-        x: Int,
-        y: Int,
-        color: Int,
-        original: Operation<Void>,
-    ) {
-        runCatching {
-            val placement = runCatching {
-                TranslationService.getConfig().serverFlagPlacement.value()
-            }.getOrDefault(PLACEMENT_UNDER_PING)
-
-            if (placement == PLACEMENT_UNDER_PING || !isServerReady()) {
-                original.call(extractor, font, text, x, y, color)
-                return
-            }
-
-            val flagChar = ServerFlagManager.getFlagChar(serverData)
-            if (flagChar == null) {
-                original.call(extractor, font, text, x, y, color)
-                return
-            }
-
-            renderDecoratedServerName(extractor, font, text, x, y, color, flagChar, original, placement)
-        }.onFailure {
-            runCatching { original.call(extractor, font, text, x, y, color) }
-        }
-    }
-
-    @Unique
-    private fun renderDecoratedServerName(
-        extractor: GuiGraphicsExtractor,
-        font: Font,
-        text: String,
-        x: Int,
-        y: Int,
-        color: Int,
-        flagChar: Char,
-        original: Operation<Void>,
-        placement: String,
-    ) {
-        if (placement == PLACEMENT_AFTER_NAME) {
-            original.call(extractor, font, text, x, y, color)
-            val flagX = x + font.width(text) + FLAG_SPACING
-            extractor.text(font, flagChar.toString(), flagX, y, color)
-            checkFlagTooltip(extractor, font, flagX, y, flagChar)
-        } else {
-            val decorated = "$flagChar $text"
-            original.call(extractor, font, decorated, x, y, color)
-            checkFlagTooltip(extractor, font, x, y, flagChar)
-        }
     }
 
     @Unique
