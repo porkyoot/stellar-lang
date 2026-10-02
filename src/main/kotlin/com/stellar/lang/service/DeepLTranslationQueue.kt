@@ -9,6 +9,7 @@
 
 package com.stellar.lang.service
 
+import com.stellar.core.ratelimit.RateLimiter
 import com.stellar.lang.plugin.deepl.DeepLPlugin
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
@@ -27,6 +28,7 @@ class DeepLTranslationQueue(
     private val onSuccess: (TranslationResult) -> Unit,
     private val onFailure: (text: String, targetLang: String, key: String) -> Unit,
     private val onComplete: (key: String, result: TranslationResult?) -> Unit,
+    val rateLimiter: RateLimiter? = null,
 ) {
     private val logger: Logger = LoggerFactory.getLogger("StellarLang-DeepLQueue")
 
@@ -96,6 +98,10 @@ class DeepLTranslationQueue(
     }
 
     private fun enforcePacing() {
+        if (rateLimiter != null) {
+            rateLimiter.acquireBlocking()
+            return
+        }
         val interval = pacingIntervalProvider()
         val now = System.currentTimeMillis()
         val elapsed = now - lastBatchTime

@@ -219,4 +219,26 @@ class DeepLTranslationQueueSpec : FunSpec({
         queue.lastBatchTime = 500L
         queue.lastBatchTime shouldBe 500L
     }
+
+    test("DeepLTranslationQueue enforces rate limiting via TokenBucket") {
+        val limiter = com.stellar.core.ratelimit.TokenBucket.forRequestsPerSecond(
+            requestsPerSecond = 50.0,
+            burstSize = 2.0,
+        )
+        val latch = CountDownLatch(2)
+        val queue = DeepLTranslationQueue(
+            pacingIntervalProvider = { 0L },
+            batchExecutor = { texts, _ -> texts.map { TranslationResult(it, it, "en", "es", false) } },
+            onSuccess = {},
+            onFailure = { _, _, _ -> },
+            onComplete = { _, _ -> latch.countDown() },
+            rateLimiter = limiter,
+        )
+
+        queue.enqueue("Item1", "k1", "es")
+        queue.enqueue("Item2", "k2", "es")
+
+        latch.await(2, TimeUnit.SECONDS) shouldBe true
+        queue.size() shouldBe 0
+    }
 })
