@@ -8,7 +8,6 @@
 package com.stellar.lang.config
 
 import com.stellar.core.config.ConfigManager
-import com.stellar.core.input.Key
 import com.stellar.lang.StellarLangMod
 import com.stellar.lang.badge.LanguageFlagHelper
 import com.stellar.lang.service.TranslationService
@@ -45,7 +44,6 @@ object LangClothConfigScreen {
         buildGeneralCategory(builder, entryBuilder, config)
         buildProvidersCategory(builder, entryBuilder, config)
         buildFeaturesCategory(builder, entryBuilder, config)
-        buildControlsCategory(builder, entryBuilder, config)
         buildCacheCategory(builder, entryBuilder, config)
 
         return builder.build()
@@ -866,22 +864,6 @@ object LangClothConfigScreen {
         category.addEntry(itemsEntry)
         category.addEntry(containersEntry)
         category.addEntry(mapBannersEntry)
-    }
-
-    private fun buildControlsCategory(builder: ConfigBuilder, entries: ConfigEntryBuilder, config: StellarLangConfig) {
-        val category = builder.getOrCreateCategory(Component.literal("Controls"))
-
-        val showOriginalKeyEntry = entries
-            .startIntField(
-                Component.literal("Show Original Key (GLFW)"),
-                config.showOriginalKey.value(),
-            )
-            .setDefaultValue(Key.KEY_COMMA)
-            .setTooltip(Component.literal("Hold key to show original text on signs & entities (default: 44 for comma)"))
-            .setSaveConsumer { value -> config.showOriginalKey.setValue(value, true) }
-            .build()
-
-        category.addEntry(showOriginalKeyEntry)
     }
 
     private fun buildCacheCategory(builder: ConfigBuilder, entries: ConfigEntryBuilder, config: StellarLangConfig) {

@@ -18,7 +18,7 @@ dist/
 # ==========================================
 run/
 logs/
-config/
+/config/
 *.log
 crash-reports/
 runGameTestServer/
