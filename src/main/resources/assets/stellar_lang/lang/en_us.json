@@ -63,9 +63,9 @@
   "stellar_lang.config.server_country_flags": "Server Country Flags",
   "stellar_lang.config.server_country_flags.comment": "Enable country flags next to servers in multiplayer server list based on GeoIP",
   "stellar_lang.config.server_flag_placement": "Server Flag Placement",
-  "stellar_lang.config.server_flag_placement.comment": "Placement of server country flag (before_name or after_name)",
+  "stellar_lang.config.server_flag_placement.comment": "Placement of server country flag (under_ping, before_name, or after_name)",
   "stellar_lang.config.server_flag_tooltip": "Server Flag Tooltips",
-  "stellar_lang.config.server_flag_tooltip.comment": "Show country name and emoji tooltip when hovering over server flag",
+  "stellar_lang.config.server_flag_tooltip.comment": "Show country name tooltip when hovering over server flag",
   "stellar_lang.server_flag.local": "Local / LAN",
   "stellar_lang.server_flag.unknown": "Unknown Location"
 }

@@ -95,7 +95,7 @@ class ServerFlagManagerSpec : FunSpec({
         flagChar shouldBe LanguageFlagHelper.getFlagChar("fr")
 
         val tooltip = ServerFlagManager.getTooltip(server)
-        tooltip?.string shouldBe "France 🇫🇷"
+        tooltip?.string shouldBe "France"
     }
 
     test("processServer handles resolver error by storing UNKNOWN") {
@@ -136,6 +136,6 @@ class ServerFlagManagerSpec : FunSpec({
         ServerFlagCache.put("unknown.server.test", GeoIpResult.UNKNOWN)
         val unknownServer = ServerData("Unknown", "unknown.server.test", ServerData.Type.OTHER)
         ServerFlagManager.getFlagChar(unknownServer) shouldBe LanguageFlagHelper.FALLBACK_CHAR
-        ServerFlagManager.getTooltip(unknownServer)?.string shouldBe "Unknown Location 🌐"
+        ServerFlagManager.getTooltip(unknownServer)?.string shouldBe "Unknown Location"
     }
 })

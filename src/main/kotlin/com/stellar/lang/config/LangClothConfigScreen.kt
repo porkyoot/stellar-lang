@@ -111,22 +111,23 @@ object LangClothConfigScreen {
             .setSaveConsumer { value -> config.serverCountryFlags.setValue(value, true) }
             .build()
 
-        val placementOptions = listOf("before_name", "after_name")
+        val placementOptions = listOf("under_ping", "before_name", "after_name")
         val placementField = entries
             .startStringDropdownMenu(
                 Component.literal("Server Flag Placement"),
                 config.serverFlagPlacement.value(),
                 { id ->
                     when (id) {
+                        "before_name" -> Component.literal("Before Server Name")
                         "after_name" -> Component.literal("After Server Name")
-                        else -> Component.literal("Before Server Name")
+                        else -> Component.literal("Under Ping (Right of MOTD)")
                     }
                 },
             )
             .setSelections(placementOptions)
-            .setDefaultValue("before_name")
+            .setDefaultValue("under_ping")
             .setTooltip(
-                Component.literal("Position of the country flag relative to the server name"),
+                Component.literal("Position of the country flag (under ping icon, before name, or after name)"),
             )
             .setSaveConsumer { value -> config.serverFlagPlacement.setValue(value.trim().lowercase(), true) }
             .build()
@@ -138,7 +139,7 @@ object LangClothConfigScreen {
             )
             .setDefaultValue(true)
             .setTooltip(
-                Component.literal("Displays country name and emoji when hovering over the server flag"),
+                Component.literal("Displays country name when hovering over the server flag"),
             )
             .setSaveConsumer { value -> config.serverFlagTooltip.setValue(value, true) }
             .build()

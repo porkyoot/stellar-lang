@@ -108,10 +108,10 @@ class StellarLangConfig : ReflectiveConfig() {
     @Comment("Enable country flags next to servers in multiplayer server list based on GeoIP")
     val serverCountryFlags: TrackedValue<Boolean> = value(true)
 
-    @Comment("Placement of server country flag (before_name or after_name)")
-    val serverFlagPlacement: TrackedValue<String> = value("before_name")
+    @Comment("Placement of server country flag (under_ping, before_name, or after_name)")
+    val serverFlagPlacement: TrackedValue<String> = value("under_ping")
 
-    @Comment("Show country name and emoji tooltip when hovering over server flag")
+    @Comment("Show country name tooltip when hovering over server flag")
     val serverFlagTooltip: TrackedValue<Boolean> = value(true)
 
     companion object {

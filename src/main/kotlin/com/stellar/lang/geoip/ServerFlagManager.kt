@@ -82,11 +82,7 @@ object ServerFlagManager {
 
     fun getTooltip(serverData: ServerData?): Component? {
         val result = processServer(serverData) ?: return null
-        if (result.isLocal) {
-            return Component.literal(result.countryName)
-        }
-        val emoji = LanguageFlagHelper.getFlagEmoji(result.countryCode)
-        return Component.literal("${result.countryName} $emoji")
+        return Component.literal(result.countryName)
     }
 
     fun clearCache() {
