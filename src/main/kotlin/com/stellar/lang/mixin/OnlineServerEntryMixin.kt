@@ -16,6 +16,7 @@ import com.stellar.lang.service.TranslationService
 import net.minecraft.client.Minecraft
 import net.minecraft.client.gui.Font
 import net.minecraft.client.gui.GuiGraphicsExtractor
+import net.minecraft.client.gui.layouts.LayoutElement
 import net.minecraft.client.gui.screens.multiplayer.ServerSelectionList
 import net.minecraft.client.multiplayer.ServerData
 import org.spongepowered.asm.mixin.Final
@@ -25,6 +26,7 @@ import org.spongepowered.asm.mixin.Unique
 import org.spongepowered.asm.mixin.injection.At
 import org.spongepowered.asm.mixin.injection.Inject
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo
+import java.lang.reflect.Method
 
 private const val FLAG_SPACING: Int = 4
 private const val PING_ICON_WIDTH: Int = 10
@@ -33,11 +35,23 @@ private const val FLAG_OFFSET_Y: Int = 12
 private const val PLACEMENT_UNDER_PING: String = "under_ping"
 private const val PLACEMENT_AFTER_NAME: String = "after_name"
 
+private val getContentRightMethod: Method? = runCatching {
+    ServerSelectionList.OnlineServerEntry::class.java.getMethod("getContentRight").apply {
+        isAccessible = true
+    }
+}.getOrNull()
+
+private val getContentYMethod: Method? = runCatching {
+    ServerSelectionList.OnlineServerEntry::class.java.getMethod("getContentY").apply {
+        isAccessible = true
+    }
+}.getOrNull()
+
 /**
  * Mixin to display GeoIP country flag badges and translate MOTD in the server selection list.
  */
 @Mixin(ServerSelectionList.OnlineServerEntry::class)
-abstract class OnlineServerEntryMixin {
+class OnlineServerEntryMixin {
     @Shadow
     @Final
     private lateinit var serverData: ServerData
@@ -48,18 +62,13 @@ abstract class OnlineServerEntryMixin {
     @Unique
     private var lastMouseY: Int = 0
 
-    @Shadow
-    abstract fun getContentRight(): Int
-
-    @Shadow
-    abstract fun getContentY(): Int
-
     @Suppress("LongParameterList")
     @Inject(
         method = [
             "extractContent(Lnet/minecraft/client/gui/GuiGraphicsExtractor;IIZF)V",
         ],
         at = [At("HEAD")],
+        require = 0,
     )
     private fun stellarOnExtractContent(
         extractor: GuiGraphicsExtractor,
@@ -69,11 +78,13 @@ abstract class OnlineServerEntryMixin {
         tickProgress: Float,
         ci: CallbackInfo,
     ) {
-        lastMouseX = x
-        lastMouseY = y
         runCatching {
-            ServerMotdTranslationManager.processMotd(serverData)
-            ServerFlagManager.processServer(serverData)
+            lastMouseX = x
+            lastMouseY = y
+            if (::serverData.isInitialized) {
+                ServerMotdTranslationManager.processMotd(serverData)
+                ServerFlagManager.processServer(serverData)
+            }
         }
     }
 
@@ -82,6 +93,7 @@ abstract class OnlineServerEntryMixin {
             "extractContent(Lnet/minecraft/client/gui/GuiGraphicsExtractor;IIZF)V",
         ],
         at = [At("TAIL")],
+        require = 0,
     )
     private fun stellarRenderTail(
         extractor: GuiGraphicsExtractor,
@@ -91,29 +103,51 @@ abstract class OnlineServerEntryMixin {
         tickProgress: Float,
         ci: CallbackInfo,
     ) {
-        val placement = runCatching {
-            TranslationService.getConfig().serverFlagPlacement.value()
-        }.getOrDefault(PLACEMENT_UNDER_PING)
+        runCatching {
+            val placement = runCatching {
+                TranslationService.getConfig().serverFlagPlacement.value()
+            }.getOrDefault(PLACEMENT_UNDER_PING)
 
-        if (placement == PLACEMENT_UNDER_PING) {
-            renderFlagUnderPing(extractor)
+            if (placement == PLACEMENT_UNDER_PING) {
+                renderFlagUnderPing(extractor)
+            }
         }
     }
 
     @Unique
+    private fun getEntryBounds(): Pair<Int, Int>? {
+        return runCatching {
+            val right = getContentRightMethod?.invoke(this) as? Int
+                ?: (this as Any as? LayoutElement)?.let { it.x + it.width - 2 }
+                ?: return null
+            val top = getContentYMethod?.invoke(this) as? Int
+                ?: (this as Any as? LayoutElement)?.let { it.y + 2 }
+                ?: return null
+            Pair(right, top)
+        }.getOrNull()
+    }
+
+    @Unique
     private fun renderFlagUnderPing(extractor: GuiGraphicsExtractor) {
-        val flagChar = runCatching {
-            if (ServerFlagManager.isEnabled()) ServerFlagManager.getFlagChar(serverData) else null
-        }.getOrNull() ?: return
+        runCatching {
+            if (!isServerReady()) return
+            val flagChar = ServerFlagManager.getFlagChar(serverData) ?: return
+            val (right, top) = getEntryBounds() ?: return
 
-        val font = Minecraft.getInstance().font
-        val flagStr = flagChar.toString()
-        val flagWidth = font.width(flagStr)
-        val flagX = getContentRight() - PING_ICON_OFFSET_X + (PING_ICON_WIDTH - flagWidth) / 2
-        val flagY = getContentY() + FLAG_OFFSET_Y
+            val font = Minecraft.getInstance().font
+            val flagStr = flagChar.toString()
+            val flagWidth = font.width(flagStr)
+            val flagX = right - PING_ICON_OFFSET_X + (PING_ICON_WIDTH - flagWidth) / 2
+            val flagY = top + FLAG_OFFSET_Y
 
-        extractor.text(font, flagStr, flagX, flagY, -1)
-        checkFlagTooltip(extractor, font, flagX, flagY, flagChar)
+            extractor.text(font, flagStr, flagX, flagY, -1)
+            checkFlagTooltip(extractor, font, flagX, flagY, flagChar)
+        }
+    }
+
+    @Unique
+    private fun isServerReady(): Boolean {
+        return ::serverData.isInitialized && ServerFlagManager.isEnabled()
     }
 
     @WrapOperation(
@@ -127,6 +161,7 @@ abstract class OnlineServerEntryMixin {
                     "Lnet/minecraft/client/gui/Font;Ljava/lang/String;III)V",
             ),
         ],
+        require = 0,
     )
     private fun stellarWrapServerName(
         extractor: GuiGraphicsExtractor,
@@ -137,25 +172,26 @@ abstract class OnlineServerEntryMixin {
         color: Int,
         original: Operation<Void>,
     ) {
-        val placement = runCatching {
-            TranslationService.getConfig().serverFlagPlacement.value()
-        }.getOrDefault(PLACEMENT_UNDER_PING)
+        runCatching {
+            val placement = runCatching {
+                TranslationService.getConfig().serverFlagPlacement.value()
+            }.getOrDefault(PLACEMENT_UNDER_PING)
 
-        if (placement == PLACEMENT_UNDER_PING) {
-            original.call(extractor, font, text, x, y, color)
-            return
+            if (placement == PLACEMENT_UNDER_PING || !isServerReady()) {
+                original.call(extractor, font, text, x, y, color)
+                return
+            }
+
+            val flagChar = ServerFlagManager.getFlagChar(serverData)
+            if (flagChar == null) {
+                original.call(extractor, font, text, x, y, color)
+                return
+            }
+
+            renderDecoratedServerName(extractor, font, text, x, y, color, flagChar, original, placement)
+        }.onFailure {
+            runCatching { original.call(extractor, font, text, x, y, color) }
         }
-
-        val flagChar = runCatching {
-            if (ServerFlagManager.isEnabled()) ServerFlagManager.getFlagChar(serverData) else null
-        }.getOrNull()
-
-        if (flagChar == null) {
-            original.call(extractor, font, text, x, y, color)
-            return
-        }
-
-        renderDecoratedServerName(extractor, font, text, x, y, color, flagChar, original, placement)
     }
 
     @Unique
@@ -190,18 +226,19 @@ abstract class OnlineServerEntryMixin {
         flagY: Int,
         flagChar: Char,
     ) {
-        val showTooltip = runCatching {
-            TranslationService.getConfig().serverFlagTooltip.value()
-        }.getOrDefault(true)
-        if (!showTooltip) return
+        runCatching {
+            val showTooltip = runCatching {
+                TranslationService.getConfig().serverFlagTooltip.value()
+            }.getOrDefault(true)
+            if (!showTooltip) return
 
-        val flagWidth = font.width(flagChar.toString())
-        val isMouseOver = lastMouseX in flagX..flagX + flagWidth && lastMouseY in flagY..flagY + font.lineHeight
-        if (isMouseOver) {
-            val tooltip = ServerFlagManager.getTooltip(serverData)
-            if (tooltip != null) {
-                extractor.setTooltipForNextFrame(tooltip, lastMouseX, lastMouseY)
-            }
+            val flagWidth = font.width(flagChar.toString())
+            val isMouseOver = lastMouseX in flagX..flagX + flagWidth &&
+                lastMouseY in flagY..flagY + font.lineHeight
+            if (!isMouseOver || !::serverData.isInitialized) return
+
+            val tooltip = ServerFlagManager.getTooltip(serverData) ?: return
+            extractor.setTooltipForNextFrame(tooltip, lastMouseX, lastMouseY)
         }
     }
 }

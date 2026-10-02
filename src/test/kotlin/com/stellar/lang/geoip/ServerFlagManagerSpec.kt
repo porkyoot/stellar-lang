@@ -11,6 +11,10 @@ class ServerFlagManagerSpec : FunSpec({
     val tempDir = Files.createTempDirectory("server_flag_manager_test")
     val testCachePath = tempDir.resolve("flags_cache.json")
 
+    beforeSpec {
+        net.minecraft.SharedConstants.tryDetectVersion()
+    }
+
     beforeEach {
         ServerFlagCache.customStoragePath = testCachePath
         ServerFlagManager.clearCache()
